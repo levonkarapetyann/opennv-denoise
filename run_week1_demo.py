@@ -1,14 +1,27 @@
-"""Stage 1.5 benchmark script: Fair Variable-Projection Spin-1 Hamiltonian Baseline Report.
+"""Stage 1.5 Final Benchmark: Fair Variable-Projection Spin-1 Hamiltonian Baseline Report.
 
-Evaluates four baseline variants across COTS SNR regimes (SNR = 15, 4, 2) using
-TEST_SEED = 90001 (strictly disjoint from DEV_SEED = 10001 used in Part 0 diagnostics):
-  1. (naive Lorentzian)                - Uncoupled 8-free-Lorentzian fitter
-  2. (physical, plain)                 - Variable-projection Spin-1 Hamiltonian + wing-anchored baseline
-  3. (physical, informed with mains)   - Variable-projection Spin-1 Hamiltonian + 50/60 Hz mains hum basis
-  4. (physical, oracle baseline)       - Variable-projection Spin-1 Hamiltonian with true (1.0 + drift) baseline
+Strict Three-Split Seed Policy:
+  1. DEV_SEED   = 10001  - Used strictly for Part 0 diagnostics and hyperparameter selection.
+  2. TEST_SEED  = 90001  - Used strictly for the single degenerate-axis demo vector
+                           B_true = (1.15, 0.75, 0.40) mT (50 MC trials/regime; not representative).
+  3. FINAL_SEED = 500001 - Held-out final evaluation set (200 spectra on S^2 including near-degenerate
+                           directions, |B| in [0.1, 3.2] mT, never used for any tuning decision).
 
-Regenerates assets/week1_snr_comparison.png using the exact median-error realization
-for each SNR regime and annotates every panel with numeric residual RMS and CRB ratio.
+Evaluated Rows:
+  - (naive, 4-symmetric-pair)                     : Uncoupled 4-pair symmetric Lorentzian (no hyperfine/Hamiltonian)
+  - (physical, plain)                             : Variable-projection Spin-1 Hamiltonian + deg-3 wing-anchored baseline
+  - (physical, informed: inverse crime, upper bd) : Adds 50/60 Hz mains sin/cos basis (uses simulator hum model)
+  - (physical, oracle: known drift only)          : Fixed baseline = 1.0 + true drift (mains hum unmodelled)
+  - (physical, oracle: true drift + hum)          : Fixed baseline = 1.0 + true drift + true hum (true baseline oracle)
+
+Failure Criteria & Error Statistics (Task 4):
+  - Fail>5xCRB : Relative failure rate (|err| > 5 * CRB_per_spectrum).
+  - WrongBasin : Canonical-wedge 3D distance ||B_fit_canon - B_true_canon||_2 > 0.15 mT (150 uT).
+  - Fail>100uT : Legacy absolute failure rate (|err| > 100 uT) kept for continuity.
+  - sigma_core : RMS of |err| across non-failed runs (|err| <= 5 * CRB).
+  - sig_core/CRB: Ratio sigma_core / CRB (annotated with '*' when Fail>5xCRB > 30%, where threshold
+                 breakdown invalidates the local Cramér-Rao bound).
+  Note: CRB assumes white intensity-scaled Gaussian noise, fixed HWHM = 4.5 MHz, and contrast = 0.03.
 """
 
 from __future__ import annotations
@@ -33,11 +46,13 @@ import numpy as np
 
 from src.baseline import fit_lorentzian_naive, fit_physical_odmr
 from src.config import CANONICAL_FREQS, D0_MHZ
-from src.noise import HardwareNoiseConfig, generate_pink_noise
-from src.physics import ODMRParams, simulate_clean_odmr
+from src.noise import HardwareNoiseConfig, apply_realistic_noise
+from src.physics import ODMRParams, canonicalize_b_vec, simulate_clean_odmr
 
 DEV_SEED: int = 10001
 TEST_SEED: int = 90001
+FINAL_SEED: int = 500001
+WRONG_BASIN_THRESH_MT: float = 0.15
 
 
 @dataclass(frozen=True)
@@ -45,6 +60,7 @@ class SNRRegime:
     """Configuration for a single COTS SNR benchmark regime."""
 
     label: str
+    eff_snr_outer: float
     noise_cfg: HardwareNoiseConfig
 
 
@@ -57,7 +73,7 @@ def compute_crb_b_mag_ut(
     contrast: float = 0.03,
     eta: float = 0.35,
 ) -> float:
-    """Compute Cramer-Rao lower bound (in uT) for |B| under white Gaussian shot-modulated noise."""
+    """Compute white-noise Cramér-Rao lower bound (in uT) for |B| at fixed reference HWHM/contrast."""
     b_mag = float(np.linalg.norm(b_vec))
     u_hat = b_vec / max(b_mag, 1e-12)
     ref = np.array([1.0, 0.0, 0.0]) if abs(u_hat[0]) < 0.8 else np.array([0.0, 1.0, 0.0])
@@ -98,48 +114,19 @@ def compute_crb_b_mag_ut(
     return float(np.sqrt(max(cov[0, 0], 0.0))) * 1000.0
 
 
-def generate_noisy_and_true_drift(
-    clean: np.ndarray, cfg: HardwareNoiseConfig, rng: np.random.Generator
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Generate noisy ODMR spectrum identically to apply_realistic_noise, returning true drift."""
-    n_points = clean.shape[0]
-    time_sec = np.arange(n_points, dtype=np.float64) * (cfg.dwell_time_ms * 1e-3)
-    u = np.linspace(-1.0, 1.0, n_points, dtype=np.float64)
-    raw_poly = (
-        rng.normal(0.0, 0.5) * u
-        + rng.normal(0.0, 0.5) * (u * u - 1.0 / 3.0)
-        + rng.normal(0.0, 0.3) * (u * u * u)
-    )
-    max_poly = float(np.max(np.abs(raw_poly)))
-    if cfg.baseline_drift_amp > 0.0 and max_poly > 1e-12:
-        drift = cfg.baseline_drift_amp * (raw_poly / max_poly) * rng.uniform(0.6, 1.0)
-    else:
-        drift = np.zeros(n_points, dtype=np.float64)
-
-    phase = rng.uniform(0.0, 2.0 * np.pi)
-    hum = cfg.hum_amp * np.sin(2.0 * np.pi * cfg.mains_freq_hz * time_sec + phase)
-
-    signal_depth = max(float(np.max(clean) - np.min(clean)), 1e-6)
-    noise_std = signal_depth / float(cfg.target_snr)
-    shot_factor = np.sqrt(np.clip(clean, 0.5, 1.5))
-    white = rng.standard_normal(n_points)
-    pink_ratio = float(np.clip(cfg.pink_noise_ratio, 0.0, 1.0))
-    if pink_ratio > 0.0:
-        pink = generate_pink_noise(n_points, rng)
-        combined = np.sqrt(1.0 - pink_ratio) * white + np.sqrt(pink_ratio) * pink
-    else:
-        combined = white
-    stochastic = noise_std * shot_factor * combined
-    return clean + drift + hum + stochastic, drift
-
-
-def _eval_trial_worker(args: Tuple[int, np.ndarray, HardwareNoiseConfig]) -> Dict[str, Any]:
-    """Run all 4 baseline methods on a single Monte Carlo realization."""
-    trial_idx, clean_spectrum, noise_cfg = args
-    seed = TEST_SEED + int(noise_cfg.target_snr * 1000) + trial_idx * 17
+def _run_all_methods_on_spectrum(
+    clean_spectrum: np.ndarray,
+    noise_cfg: HardwareNoiseConfig,
+    seed: int,
+) -> Dict[str, Any]:
+    """Generate noisy spectrum via apply_realistic_noise(return_components=True) and run all 5 fitters."""
     rng = np.random.default_rng(seed)
-    noisy, drift = generate_noisy_and_true_drift(clean_spectrum, noise_cfg, rng)
-    true_baseline = 1.0 + drift
+    noisy_out = apply_realistic_noise(clean_spectrum, noise_cfg, rng=rng, return_components=True)
+    assert isinstance(noisy_out, tuple)
+    noisy, comps = noisy_out
+
+    true_bl_drift_only = 1.0 + comps["drift"]
+    true_bl_full = 1.0 + comps["drift"] + comps["hum"]
 
     r_naive = fit_lorentzian_naive(CANONICAL_FREQS, noisy)
     r_plain = fit_physical_odmr(CANONICAL_FREQS, noisy, variant="plain")
@@ -149,25 +136,264 @@ def _eval_trial_worker(args: Tuple[int, np.ndarray, HardwareNoiseConfig]) -> Dic
         dwell_time=noise_cfg.dwell_time_ms * 1e-3,
         variant="informed",
     )
-    r_oracle = fit_physical_odmr(
+    r_oracle_drift = fit_physical_odmr(
         CANONICAL_FREQS,
         noisy,
-        oracle_baseline=true_baseline,
+        oracle_baseline=true_bl_drift_only,
+        variant="oracle_drift",
+    )
+    r_oracle_full = fit_physical_odmr(
+        CANONICAL_FREQS,
+        noisy,
+        oracle_baseline=true_bl_full,
         variant="oracle_baseline",
     )
     return {
-        "trial_idx": trial_idx,
         "noisy": noisy,
-        "true_baseline": true_baseline,
+        "true_bl_drift_only": true_bl_drift_only,
+        "true_bl_full": true_bl_full,
         "naive": r_naive,
         "plain": r_plain,
         "informed": r_inf,
-        "oracle": r_oracle,
+        "oracle_drift": r_oracle_drift,
+        "oracle_full": r_oracle_full,
     }
 
 
+def _demo_trial_worker(args: Tuple[int, np.ndarray, HardwareNoiseConfig]) -> Dict[str, Any]:
+    """Worker for the single-vector demo benchmark (TEST_SEED = 90001)."""
+    trial_idx, clean_spectrum, noise_cfg = args
+    seed = TEST_SEED + int(noise_cfg.target_snr * 1000) + trial_idx * 17
+    out = _run_all_methods_on_spectrum(clean_spectrum, noise_cfg, seed)
+    out["trial_idx"] = trial_idx
+    return out
+
+
+def _final_set_worker(args: Tuple[Dict[str, Any], HardwareNoiseConfig]) -> Dict[str, Any]:
+    """Worker for the 200-spectrum held-out FINAL set (FINAL_SEED = 500001)."""
+    item, noise_cfg = args
+    idx = int(item["idx"])
+    seed = FINAL_SEED + int(noise_cfg.target_snr * 1000) + idx * 29
+    out = _run_all_methods_on_spectrum(item["clean"], noise_cfg, seed)
+    # Compute per-spectrum white-noise CRB (standardized at HWHM=4.5 MHz, contrast=0.03 per Task 4)
+    crb_ut = compute_crb_b_mag_ut(CANONICAL_FREQS, item["b_vec"], noise_cfg)
+    out["idx"] = idx
+    out["b_mag"] = item["b_mag"]
+    out["b_canon"] = item["b_canon"]
+    out["crb_ut"] = crb_ut
+    return out
+
+
+def generate_final_evaluation_set(n_spectra: int = 200, seed: int = FINAL_SEED) -> List[Dict[str, Any]]:
+    """Generate the 200-spectrum held-out FINAL set on S^2 (including 20% near-degenerate directions)."""
+    rng = np.random.default_rng(seed)
+    items: List[Dict[str, Any]] = []
+    for i in range(n_spectra):
+        if i % 10 == 0:
+            # Near B . n_2 = 0 perpendicular-axis plane (Bx + By ~ Bz)
+            t = float(rng.uniform(0.10, 0.48))
+            u = np.array([t, 1.0 - t + float(rng.normal(0.0, 0.02)), 1.0], dtype=np.float64)
+            u = rng.choice([-1.0, 1.0], size=3) * rng.permutation(u)
+        elif i % 10 == 1:
+            # Near symmetry boundary plane Bx ~ By
+            t = float(rng.uniform(0.15, 0.85))
+            u = np.array([t, t + float(rng.normal(0.0, 0.02)), 1.0], dtype=np.float64)
+            u = rng.choice([-1.0, 1.0], size=3) * rng.permutation(u)
+        else:
+            u = rng.normal(size=3)
+        u /= np.linalg.norm(u)
+        b_mag = float(rng.uniform(0.1, 3.2))
+        b_vec = u * b_mag
+        gamma = float(rng.uniform(3.0, 9.0))
+        d0 = float(rng.uniform(2867.5, 2872.5))
+        contrast = float(rng.uniform(0.02, 0.04))
+        clean = simulate_clean_odmr(
+            CANONICAL_FREQS,
+            ODMRParams(
+                b_field_mt=tuple(b_vec.tolist()),
+                linewidth_mhz=gamma,
+                d0_mhz=d0,
+                base_contrast=contrast,
+            ),
+        )["spectrum"]
+        items.append(
+            {
+                "idx": i,
+                "b_vec": b_vec,
+                "b_canon": canonicalize_b_vec(b_vec),
+                "b_mag": b_mag,
+                "gamma": gamma,
+                "d0": d0,
+                "contrast": contrast,
+                "clean": clean,
+            }
+        )
+    return items
+
+
+def summarize_metrics(
+    errs_ut: np.ndarray,
+    crbs_ut: np.ndarray,
+    wedge_dists_mt: np.ndarray,
+    mean_rt_ms: float,
+    is_naive: bool = False,
+) -> Dict[str, Any]:
+    """Compute Task 4 error statistics and failure rates."""
+    med_ut = float(np.median(errs_ut))
+    p90_ut = float(np.percentile(errs_ut, 90))
+    mae_ut = float(np.mean(errs_ut))
+
+    rel_fail_mask = errs_ut > (5.0 * crbs_ut)
+    fail_5x_pct = float(np.mean(rel_fail_mask) * 100.0)
+    fail_100_pct = float(np.mean(errs_ut > 100.0) * 100.0)
+    wrong_basin_pct = float(np.mean(wedge_dists_mt > WRONG_BASIN_THRESH_MT) * 100.0)
+
+    core_mask = ~rel_fail_mask
+    if np.any(core_mask):
+        sigma_core_ut = float(np.sqrt(np.mean(errs_ut[core_mask] ** 2)))
+        core_crb_ref = float(np.median(crbs_ut[core_mask]))
+    else:
+        sigma_core_ut = float(np.sqrt(np.mean(errs_ut ** 2)))
+        core_crb_ref = float(np.median(crbs_ut))
+
+    med_crb_ut = float(np.median(crbs_ut))
+    sig_over_crb = sigma_core_ut / max(core_crb_ref, 1e-9)
+    in_threshold_regime = fail_5x_pct > 30.0
+
+    return {
+        "med_ut": med_ut,
+        "p90_ut": p90_ut,
+        "mae_ut": mae_ut,
+        "sigma_core_ut": sigma_core_ut,
+        "fail_5x_pct": fail_5x_pct,
+        "wrong_basin_pct": wrong_basin_pct,
+        "fail_100_pct": fail_100_pct,
+        "mean_rt_ms": mean_rt_ms,
+        "sig_over_crb": sig_over_crb,
+        "med_crb_ut": med_crb_ut,
+        "in_threshold_regime": in_threshold_regime,
+        "is_naive": is_naive,
+    }
+
+
+def print_table_header(title: str, subtitle: str) -> None:
+    print("\n" + "=" * 142)
+    print(title)
+    print(subtitle)
+    print("=" * 142)
+    print(
+        f"{'SNR':>4} | {'EffSNR':>6} | {'Method':<43} | {'Med(uT)':>8} | {'P90(uT)':>8} | "
+        f"{'MAE(uT)':>8} | {'sig_core':>8} | {'Fail>5xCRB':>10} | {'WrongBasin':>10} | "
+        f"{'Fail>100uT':>10} | {'Time(ms)':>8} | {'sig/CRB':>8}"
+    )
+    print("-" * 142)
+
+
+def print_table_row(snr: float, eff_snr: float, label: str, s: Dict[str, Any]) -> None:
+    wb_str = f"{s['wrong_basin_pct']:>9.1f}%" if not s["is_naive"] else f"{'N/A(1D)':>10}"
+    flag = "*" if s["in_threshold_regime"] else " "
+    ratio_str = f"{s['sig_over_crb']:>6.2f}x{flag}"
+    print(
+        f"{snr:>4.0f} | {eff_snr:>6.2f} | {label:<43} | {s['med_ut']:>8.2f} | {s['p90_ut']:>8.2f} | "
+        f"{s['mae_ut']:>8.2f} | {s['sigma_core_ut']:>8.2f} | {s['fail_5x_pct']:>9.1f}% | "
+        f"{wb_str} | {s['fail_100_pct']:>9.1f}% | {s['mean_rt_ms']:>8.1f} | {ratio_str:>8}"
+    )
+
+
 def main() -> None:
-    """Run Stage 1.5 benchmark across SNR=15, 4, 2 and save representative comparison figure."""
+    """Run Stage 1.5 benchmark on Held-Out FINAL-200 Set and Single-Vector Demo Set."""
+    regimes: List[SNRRegime] = [
+        SNRRegime(
+            label="High SNR",
+            eff_snr_outer=4.07,
+            noise_cfg=HardwareNoiseConfig(
+                target_snr=15.0,
+                dwell_time_ms=0.8,
+                mains_freq_hz=50.0,
+                hum_amp=0.0015,
+                baseline_drift_amp=0.005,
+                pink_noise_ratio=0.25,
+            ),
+        ),
+        SNRRegime(
+            label="Medium COTS",
+            eff_snr_outer=1.51,
+            noise_cfg=HardwareNoiseConfig(
+                target_snr=4.0,
+                dwell_time_ms=0.8,
+                mains_freq_hz=50.0,
+                hum_amp=0.0030,
+                baseline_drift_amp=0.012,
+                pink_noise_ratio=0.25,
+            ),
+        ),
+        SNRRegime(
+            label="Low COTS",
+            eff_snr_outer=0.93,
+            noise_cfg=HardwareNoiseConfig(
+                target_snr=2.0,
+                dwell_time_ms=0.8,
+                mains_freq_hz=50.0,
+                hum_amp=0.0035,
+                baseline_drift_amp=0.015,
+                pink_noise_ratio=0.25,
+            ),
+        ),
+    ]
+
+    method_specs = [
+        ("naive", "(naive, 4-symmetric-pair Lorentzian)"),
+        ("plain", "(physical, plain)"),
+        ("informed", "(physical, informed: inverse crime, UB)"),
+        ("oracle_drift", "(physical, oracle: known drift only)"),
+        ("oracle_full", "(physical, oracle: true drift + hum)"),
+    ]
+
+    n_workers = max(1, min(os.cpu_count() or 4, 8))
+
+    # =========================================================================
+    # PART A: HELD-OUT FINAL SET (FINAL_SEED = 500001, N = 200 Spectra on S^2)
+    # =========================================================================
+    final_items = generate_final_evaluation_set(200, FINAL_SEED)
+    print_table_header(
+        "TABLE 1: OpenNV-Denoise Stage 1.5 Held-Out FINAL Set Benchmark (Primary Representative Evaluation)",
+        f"N = 200 Spectra on S^2 (incl. 20% near-degenerate) | |B| in [0.1, 3.2] mT | FINAL_SEED = {FINAL_SEED} (Untuned)",
+    )
+
+    for regime in regimes:
+        snr_val = regime.noise_cfg.target_snr
+        eff_snr = regime.eff_snr_outer
+
+        # Uncontended single-process wall-clock runtime sample (10 spectra)
+        rt_single: Dict[str, List[float]] = {k: [] for k, _ in method_specs}
+        for s_i in range(10):
+            res_1 = _final_set_worker((final_items[s_i], regime.noise_cfg))
+            for key, _ in method_specs:
+                rt_single[key].append(float(res_1[key]["runtime_ms"]))
+
+        tasks_final = [(item, regime.noise_cfg) for item in final_items]
+        with ProcessPoolExecutor(max_workers=n_workers) as ex:
+            final_results = list(ex.map(_final_set_worker, tasks_final, chunksize=6))
+
+        crbs_arr = np.array([float(r["crb_ut"]) for r in final_results], dtype=np.float64)
+        for key, label in method_specs:
+            errs = np.array(
+                [abs(float(r[key]["b_mag"]) - float(r["b_mag"])) * 1000.0 for r in final_results],
+                dtype=np.float64,
+            )
+            w_dists = np.array(
+                [float(np.linalg.norm(r[key]["b_vec"] - r["b_canon"])) for r in final_results],
+                dtype=np.float64,
+            )
+            stats = summarize_metrics(
+                errs, crbs_arr, w_dists, float(np.mean(rt_single[key])), is_naive=(key == "naive")
+            )
+            print_table_row(snr_val, eff_snr, label, stats)
+        print("-" * 142)
+
+    # =========================================================================
+    # PART B: SINGLE DEGENERATE-AXIS DEMO VECTOR (TEST_SEED = 90001, 50 Trials)
+    # =========================================================================
     params = ODMRParams(
         b_field_mt=(1.15, 0.75, 0.40),
         base_contrast=0.03,
@@ -180,110 +406,49 @@ def main() -> None:
     clean_spectrum = sim_out["spectrum"]
     b_true_mt = float(sim_out["b_magnitude_mt"])
     b_true_vec = np.asarray(params.b_field_mt, dtype=np.float64)
-
-    regimes: List[SNRRegime] = [
-        SNRRegime(
-            label="High SNR",
-            noise_cfg=HardwareNoiseConfig(
-                target_snr=15.0,
-                dwell_time_ms=0.8,
-                mains_freq_hz=50.0,
-                hum_amp=0.0015,
-                baseline_drift_amp=0.005,
-                pink_noise_ratio=0.25,
-            ),
-        ),
-        SNRRegime(
-            label="Medium COTS",
-            noise_cfg=HardwareNoiseConfig(
-                target_snr=4.0,
-                dwell_time_ms=0.8,
-                mains_freq_hz=50.0,
-                hum_amp=0.0030,
-                baseline_drift_amp=0.012,
-                pink_noise_ratio=0.25,
-            ),
-        ),
-        SNRRegime(
-            label="Low COTS",
-            noise_cfg=HardwareNoiseConfig(
-                target_snr=2.0,
-                dwell_time_ms=0.8,
-                mains_freq_hz=50.0,
-                hum_amp=0.0035,
-                baseline_drift_amp=0.015,
-                pink_noise_ratio=0.25,
-            ),
-        ),
-    ]
-
+    b_true_canon = canonicalize_b_vec(b_true_vec)
     n_trials = 50
-    method_specs = [
-        ("naive", "(naive Lorentzian)"),
-        ("plain", "(physical, plain)"),
-        ("informed", "(physical, informed with mains terms)"),
-        ("oracle", "(physical, oracle baseline)"),
-    ]
 
-    print("=" * 108)
-    print("OpenNV-Denoise Stage 1.5: Variable-Projection Spin-1 Hamiltonian Baseline Benchmark")
-    print(
-        f"4-Axis Ensemble | B_true = {params.b_field_mt} mT (|B| = {b_true_mt:.4f} mT) | "
-        f"N = {len(CANONICAL_FREQS)} pts | MC Trials = {n_trials}/regime | TEST_SEED = {TEST_SEED}"
+    print_table_header(
+        "TABLE 2: Single Degenerate-Axis Demo Vector (Single Degenerate-Axis Vector; Not Representative)",
+        f"B_true = {params.b_field_mt} mT (|B| = {b_true_mt:.4f} mT, B . n_2 = 0) | MC Trials = {n_trials}/regime | TEST_SEED = {TEST_SEED}",
     )
-    print("=" * 108)
-    print(
-        f"{'SNR':>5} | {'Method':<37} | {'Median(uT)':>10} | {'P90(uT)':>9} | "
-        f"{'MAE(uT)':>9} | {'Fail>100uT':>10} | {'Time(ms)':>8} | {'Med/CRB':>7}"
-    )
-    print("-" * 108)
 
     panel_items: List[Dict[str, Any]] = []
-    n_workers = max(1, min(os.cpu_count() or 4, 8))
 
     for regime in regimes:
         snr_val = regime.noise_cfg.target_snr
+        eff_snr = regime.eff_snr_outer
         crb_ut = compute_crb_b_mag_ut(CANONICAL_FREQS, b_true_vec, regime.noise_cfg)
+        crb_vec = np.full(n_trials, crb_ut, dtype=np.float64)
 
-        # Measure uncontended single-process wall-clock runtime on 10 trials
-        rt_single: Dict[str, List[float]] = {k: [] for k, _ in method_specs}
+        rt_single_demo: Dict[str, List[float]] = {k: [] for k, _ in method_specs}
         for t_i in range(10):
-            res_1 = _eval_trial_worker((t_i, clean_spectrum, regime.noise_cfg))
+            res_1 = _demo_trial_worker((t_i, clean_spectrum, regime.noise_cfg))
             for key, _ in method_specs:
-                rt_single[key].append(float(res_1[key]["runtime_ms"]))
+                rt_single_demo[key].append(float(res_1[key]["runtime_ms"]))
 
-        tasks = [(t_i, clean_spectrum, regime.noise_cfg) for t_i in range(n_trials)]
+        tasks_demo = [(t_i, clean_spectrum, regime.noise_cfg) for t_i in range(n_trials)]
         with ProcessPoolExecutor(max_workers=n_workers) as ex:
-            trial_results = list(ex.map(_eval_trial_worker, tasks, chunksize=4))
+            trial_results = list(ex.map(_demo_trial_worker, tasks_demo, chunksize=4))
 
-        regime_summary: Dict[str, Dict[str, float]] = {}
+        regime_summary: Dict[str, Dict[str, Any]] = {}
         for key, label in method_specs:
             errs = np.array(
                 [abs(float(tr[key]["b_mag"]) - b_true_mt) * 1000.0 for tr in trial_results],
                 dtype=np.float64,
             )
-            med_ut = float(np.median(errs))
-            p90_ut = float(np.percentile(errs, 90))
-            mae_ut = float(np.mean(errs))
-            fail_pct = float(np.mean(errs > 100.0) * 100.0)
-            mean_rt = float(np.mean(rt_single[key]))
-            crb_ratio = med_ut / max(crb_ut, 1e-9)
-            regime_summary[key] = {
-                "med_ut": med_ut,
-                "p90_ut": p90_ut,
-                "mae_ut": mae_ut,
-                "fail_pct": fail_pct,
-                "mean_rt": mean_rt,
-                "crb_ratio": crb_ratio,
-                "crb_ut": crb_ut,
-            }
-            print(
-                f"{snr_val:>5.1f} | {label:<37} | {med_ut:>10.2f} | {p90_ut:>9.2f} | "
-                f"{mae_ut:>9.2f} | {fail_pct:>9.1f}% | {mean_rt:>8.1f} | {crb_ratio:>6.2f}x"
+            w_dists = np.array(
+                [float(np.linalg.norm(tr[key]["b_vec"] - b_true_canon)) for tr in trial_results],
+                dtype=np.float64,
             )
-        print("-" * 108)
+            stats = summarize_metrics(
+                errs, crb_vec, w_dists, float(np.mean(rt_single_demo[key])), is_naive=(key == "naive")
+            )
+            regime_summary[key] = stats
+            print_table_row(snr_val, eff_snr, label, stats)
+        print("-" * 142)
 
-        # Select the exact median-error realization of (physical, plain) for non-cherry-picked plotting
         plain_errs = np.array(
             [abs(float(tr["plain"]["b_mag"]) - b_true_mt) * 1000.0 for tr in trial_results],
             dtype=np.float64,
@@ -292,6 +457,8 @@ def main() -> None:
         rep_trial = trial_results[median_rank_idx]
         rep_plain = rep_trial["plain"]
         rep_inf = rep_trial["informed"]
+        rep_ora = rep_trial["oracle_full"]
+        rep_naive = rep_trial["naive"]
         true_noise_rms = float(np.sqrt(np.mean((rep_trial["noisy"] - clean_spectrum) ** 2)))
 
         panel_items.append(
@@ -301,29 +468,42 @@ def main() -> None:
                 "rep_noisy": rep_trial["noisy"],
                 "rep_plain": rep_plain,
                 "rep_inf": rep_inf,
+                "rep_ora": rep_ora,
+                "rep_naive": rep_naive,
                 "rep_plain_err_ut": float(plain_errs[median_rank_idx]),
                 "rep_inf_err_ut": abs(float(rep_inf["b_mag"]) - b_true_mt) * 1000.0,
+                "rep_ora_err_ut": abs(float(rep_ora["b_mag"]) - b_true_mt) * 1000.0,
+                "rep_naive_err_ut": abs(float(rep_naive["b_mag"]) - b_true_mt) * 1000.0,
                 "true_noise_rms": true_noise_rms,
                 "summary": regime_summary,
             }
         )
 
+    print(
+        "Note: '*' indicates threshold breakdown regime (Fail>5xCRB > 30%) where local white-noise CRB "
+        "(computed at fixed HWHM=4.5 MHz, contrast=0.03) is not a valid lower bound."
+    )
+
     # Generate high-resolution 3-panel SNR comparison figure using median-error realizations
-    fig, axes = plt.subplots(1, 3, figsize=(17.5, 5.2), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(18.5, 5.5), sharey=True)
     for ax, item in zip(axes, panel_items):
         regime = item["regime"]
         assert isinstance(regime, SNRRegime)
         s_plain = item["summary"]["plain"]
         s_inf = item["summary"]["informed"]
+        s_ora = item["summary"]["oracle_full"]
+        s_naive = item["summary"]["naive"]
         rep_plain = item["rep_plain"]
         rep_inf = item["rep_inf"]
+        rep_ora = item["rep_ora"]
+        rep_naive = item["rep_naive"]
 
         ax.plot(
             CANONICAL_FREQS,
             item["rep_noisy"],
-            color="#9e9e9e",
-            linewidth=0.85,
-            alpha=0.70,
+            color="#b0b0b0",
+            linewidth=0.80,
+            alpha=0.65,
             label="Raw Noisy COTS",
         )
         ax.plot(
@@ -335,19 +515,37 @@ def main() -> None:
         )
         ax.plot(
             CANONICAL_FREQS,
+            rep_naive["fitted_curve"],
+            color="#9467bd",
+            linestyle=":",
+            linewidth=1.2,
+            alpha=0.85,
+            label="Naive 4-Pair Lorentzian",
+        )
+        ax.plot(
+            CANONICAL_FREQS,
             rep_plain["fitted_curve"],
             color="#d62728",
             linestyle="--",
             linewidth=1.5,
-            label="Physical Fit (Plain)",
+            label="Physical (Plain)",
         )
         ax.plot(
             CANONICAL_FREQS,
             rep_inf["fitted_curve"],
             color="#2ca02c",
             linestyle="-.",
-            linewidth=1.4,
-            label="Physical Fit (Informed Mains)",
+            linewidth=1.35,
+            label="Physical (Informed: Inv. Crime UB)",
+        )
+        ax.plot(
+            CANONICAL_FREQS,
+            rep_ora["fitted_curve"],
+            color="#17becf",
+            linestyle="-",
+            linewidth=1.15,
+            alpha=0.85,
+            label="Physical (Oracle: True Drift+Hum)",
         )
         ax.plot(
             CANONICAL_FREQS,
@@ -359,42 +557,42 @@ def main() -> None:
         )
 
         ax.set_title(
-            f"{regime.label} (SNR = {regime.noise_cfg.target_snr:.0f}, CRB = {item['crb_ut']:.1f} uT)\n"
-            f"Plain Med = {s_plain['med_ut']:.1f} uT ({s_plain['crb_ratio']:.2f}x CRB) | "
-            f"Informed Med = {s_inf['med_ut']:.1f} uT ({s_inf['crb_ratio']:.2f}x CRB)",
-            fontsize=10.0,
+            f"{regime.label} (Nom SNR={regime.noise_cfg.target_snr:.0f}, "
+            f"Eff Outer SNR={regime.eff_snr_outer:.2f}, CRB={item['crb_ut']:.1f} uT)\n"
+            f"Plain Med={s_plain['med_ut']:.1f}uT (sig/CRB={s_plain['sig_over_crb']:.2f}x) | "
+            f"Oracle Med={s_ora['med_ut']:.1f}uT ({s_ora['sig_over_crb']:.2f}x)",
+            fontsize=9.3,
             fontweight="bold",
         )
-        # Annotate panel with numeric residual RMS and median-realization error
         annot_text = (
-            f"Median-Error Realization:\n"
-            f"Plain |dB| = {item['rep_plain_err_ut']:.1f} uT, "
-            f"Resid RMS = {rep_plain['residual_rms']:.5f}\n"
-            f"Informed |dB| = {item['rep_inf_err_ut']:.1f} uT, "
-            f"Resid RMS = {rep_inf['residual_rms']:.5f}\n"
-            f"True Noise RMS = {item['true_noise_rms']:.5f} | "
-            f"Fail(>100uT): {s_plain['fail_pct']:.1f}% / {s_inf['fail_pct']:.1f}%"
+            f"Median-Error Realization (Plain):\n"
+            f"Naive 4-Pair : |dB|={item['rep_naive_err_ut']:.0f} uT, RMS={rep_naive['residual_rms']:.5f}\n"
+            f"Phys (Plain) : |dB|={item['rep_plain_err_ut']:.1f} uT, RMS={rep_plain['residual_rms']:.5f}\n"
+            f"Phys (Inf UB): |dB|={item['rep_inf_err_ut']:.1f} uT, RMS={rep_inf['residual_rms']:.5f}\n"
+            f"Phys (Oracle): |dB|={item['rep_ora_err_ut']:.1f} uT, RMS={rep_ora['residual_rms']:.5f}\n"
+            f"True Noise RMS={item['true_noise_rms']:.5f} | "
+            f"Fail>5xCRB(Pl/Or): {s_plain['fail_5x_pct']:.0f}%/{s_ora['fail_5x_pct']:.0f}%"
         )
         ax.text(
-            0.03,
-            0.04,
+            0.025,
+            0.035,
             annot_text,
             transform=ax.transAxes,
-            fontsize=8.2,
+            fontsize=7.6,
             verticalalignment="bottom",
-            bbox={"boxstyle": "round,pad=0.35", "facecolor": "white", "alpha": 0.88, "edgecolor": "#cccccc"},
+            bbox={"boxstyle": "round,pad=0.32", "facecolor": "white", "alpha": 0.90, "edgecolor": "#cccccc"},
         )
         ax.set_xlabel("Microwave Frequency (MHz)", fontsize=10)
         ax.set_xlim(CANONICAL_FREQS[0], CANONICAL_FREQS[-1])
         ax.grid(True, linestyle=":", alpha=0.45)
 
     axes[0].set_ylabel("Normalized Fluorescence", fontsize=10)
-    axes[0].legend(loc="upper right", fontsize=8.0, framealpha=0.92)
+    axes[0].legend(loc="upper right", fontsize=7.4, framealpha=0.92)
 
     fig.suptitle(
-        f"OpenNV-Denoise Stage 1.5 Variable-Projection Physical Baseline "
-        f"(B_true = {params.b_field_mt} mT, |B| = {b_true_mt:.4f} mT, Median-Error Realizations)",
-        fontsize=12.0,
+        f"OpenNV-Denoise Stage 1.5 Physical Baseline — Single Degenerate-Axis Demo Vector "
+        f"B_true = {params.b_field_mt} mT (|B| = {b_true_mt:.4f} mT, Not Representative)",
+        fontsize=11.5,
         fontweight="bold",
         y=1.02,
     )

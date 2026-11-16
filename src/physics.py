@@ -196,10 +196,11 @@ def b_mag_from_splittings(
     carry opposite signs, their sum across the 4 tetrahedral axes cancels to
     ~0.088 uT RMS across ``[0.1, 3.2]`` mT.
 
-    Order 2 applies 3 fixed-point iterations of the non-degenerate second-order
-    perturbation relation ``df_i ~= 2 a_i [1 - b_i^2 / (2 (D0^2 - a_i^2))]`` on
-    axes where ``a_i > 10 * b_i^2 / D0``, skipping near-degenerate axes where
-    non-degenerate perturbation theory breaks down.
+    Order 2 applies 5 fixed-point iterations of the uniform second-order
+    eigenvalue relation (including transverse level repulsion at ``a_i -> 0``):
+    ``df_i ~= 2 * sqrt([a_i * (1 - b_i^2 / (2 * (D0^2 - a_i^2)))]^2 + (b_i^2 / (2 * D0))^2)``,
+    inverting ``a_i = gamma_e * B_par_i`` per axis and reconstructing
+    ``|B| = sqrt(3) / (2 * gamma_e) * sqrt(sum_i a_i^2)`` (~0.0002 uT RMS).
 
     Args:
         splittings_mhz: Splitting values ``f_plus - f_minus`` in MHz. Supports
@@ -227,16 +228,18 @@ def b_mag_from_splittings(
                 np.sum(arr * arr, axis=-1)
             )
         else:
+            half_df_sq = (0.5 * np.abs(arr)) ** 2
             a = 0.5 * np.abs(arr)
-            d0_sq = float(d0_mhz) * float(d0_mhz)
-            for _ in range(3):
+            d0_val = float(d0_mhz)
+            d0_sq = d0_val * d0_val
+            for _ in range(5):
                 g2_b2 = (3.0 / 4.0) * np.sum(a * a, axis=-1, keepdims=True)
                 b_sq = np.maximum(0.0, g2_b2 - a * a)
-                valid = a > 10.0 * (b_sq / float(d0_mhz))
+                repulsion_sq = (b_sq / (2.0 * d0_val)) ** 2
+                rem_sq = np.maximum(0.0, half_df_sq - repulsion_sq)
                 denom = np.maximum(d0_sq - a * a, 1e-6)
-                corr = 1.0 - b_sq / (2.0 * denom)
-                corr = np.clip(corr, 0.5, 1.0)
-                a = np.where(valid, (0.5 * np.abs(arr)) / corr, 0.5 * np.abs(arr))
+                corr = np.clip(1.0 - b_sq / (2.0 * denom), 0.5, 1.0)
+                a = np.sqrt(rem_sq) / corr
             b_mag = (_SQRT_3 / (2.0 * GAMMA_E_MHZ_MT)) * np.sqrt(
                 np.sum(a * a, axis=-1)
             )

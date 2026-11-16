@@ -325,7 +325,9 @@ def test_b_mag_from_splittings_orders_on_exact_eigh() -> None:
     assert max1_ut < 0.65
     assert rms2_ut < 0.30
     assert max2_ut < 0.85
-    assert rms1_ut < rms2_ut
+    assert rms2_ut < 0.002
+    assert max2_ut < 0.005
+    assert rms2_ut < rms1_ut
 
 
 def test_wedge_invariance_48_symmetries_and_strain_guard() -> None:
@@ -460,3 +462,119 @@ def test_baseline_statistical_accuracy_snr15() -> None:
 
     assert float(np.median(arr_inf)) <= 2.5 * median_crb_ut
     assert float(np.mean(arr_inf > 100.0)) < 0.02
+
+
+def test_noise_paths_identical_and_components() -> None:
+    """Verify apply_realistic_noise return_components=False vs True produce identical outputs."""
+    clean = simulate_clean_odmr(
+        CANONICAL_FREQS, ODMRParams(b_field_mt=(1.15, 0.75, 0.40))
+    )["spectrum"]
+    for use_heavy in (False, True):
+        cfg = HardwareNoiseConfig(
+            target_snr=4.0,
+            dwell_time_ms=0.8,
+            mains_freq_hz=50.0,
+            hum_amp=0.003,
+            baseline_drift_amp=0.012,
+            pink_noise_ratio=0.25,
+            use_heavy_tails=use_heavy,
+        )
+        rng_a = np.random.default_rng(TEST_SEED + 201)
+        rng_b = np.random.default_rng(TEST_SEED + 201)
+        noisy_plain = apply_realistic_noise(clean, cfg, rng=rng_a, return_components=False)
+        noisy_tuple = apply_realistic_noise(clean, cfg, rng=rng_b, return_components=True)
+        assert isinstance(noisy_tuple, tuple)
+        noisy_comp, comps = noisy_tuple
+        assert np.array_equal(noisy_plain, noisy_comp)
+        assert np.array_equal(noisy_plain, comps["total"])
+        reconstructed = (
+            comps["clean"] + comps["drift"] + comps["hum"] + comps["pink"] + comps["white"]
+        )
+        assert np.allclose(reconstructed, comps["total"], atol=1e-14)
+
+
+def test_resampler_valid_mask_end_to_end_and_out_of_range() -> None:
+    """Test resampler valid_mask, end-to-end 2800-2940 MHz fit, out_of_range flag, and 1001->512 cell-averaging."""
+    rng = np.random.default_rng(TEST_SEED + 202)
+    params_in_range = ODMRParams(b_field_mt=(1.15, 0.75, 0.40))
+    b_true = float(np.linalg.norm(params_in_range.b_field_mt))
+
+    # 1. End-to-end 2800-2940 MHz input -> resampler -> fit_physical_odmr with valid_mask
+    freqs_2800_2940 = np.linspace(2800.0, 2940.0, 350)
+    clean_sub = simulate_clean_odmr(freqs_2800_2940, params_in_range)["spectrum"]
+    noisy_sub = apply_realistic_noise(
+        clean_sub,
+        HardwareNoiseConfig(target_snr=15.0, hum_amp=0.001, baseline_drift_amp=0.003),
+        rng=rng,
+    )
+    resampled, valid_mask, meta = resample_spectrum_pchip(
+        freqs_2800_2940, noisy_sub, target_freqs=CANONICAL_FREQS, return_valid_mask=True
+    )
+    assert valid_mask.dtype == bool
+    assert np.array_equal(valid_mask, meta["valid_mask"])
+    assert np.all(valid_mask == ((CANONICAL_FREQS >= 2800.0) & (CANONICAL_FREQS <= 2940.0)))
+    assert meta["out_of_range"] is False
+
+    fit_sub = fit_physical_odmr(CANONICAL_FREQS, resampled, valid_mask=valid_mask, variant="plain")
+    assert fit_sub["success"] is True
+    assert fit_sub["out_of_range"] is False
+    assert fit_sub["status"] == "converged"
+    assert abs(float(fit_sub["b_mag"]) - b_true) * 1000.0 < 35.0
+
+    # 2. High-field |B| = 2.50 mT on narrow [2830, 2910] MHz window must trigger out_of_range
+    params_high_b = ODMRParams(b_field_mt=(0.40, 0.90, 2.30))
+    freqs_narrow = np.linspace(2830.0, 2910.0, 250)
+    clean_high = simulate_clean_odmr(freqs_narrow, params_high_b)["spectrum"]
+    res_high, mask_high, meta_high = resample_spectrum_pchip(
+        freqs_narrow, clean_high, target_freqs=CANONICAL_FREQS, return_valid_mask=True
+    )
+    fit_high = fit_physical_odmr(CANONICAL_FREQS, res_high, valid_mask=mask_high, variant="plain")
+    assert fit_high["out_of_range"] is True
+    assert fit_high["status"] == "out_of_range"
+    assert fit_high["success"] is False
+
+    # 3. 1001 -> 512 cell-averaging downsampling accuracy
+    freqs_1001 = np.linspace(2750.0, 2990.0, 1001)
+    clean_1001 = simulate_clean_odmr(freqs_1001, params_in_range)["spectrum"]
+    clean_512 = simulate_clean_odmr(CANONICAL_FREQS, params_in_range)["spectrum"]
+    down_512, meta_1001 = resample_spectrum_pchip(freqs_1001, clean_1001, target_freqs=CANONICAL_FREQS)
+    assert np.all(meta_1001["valid_mask"])
+    assert float(np.sqrt(np.mean((down_512 - clean_512) ** 2))) < 5e-6
+
+
+def test_naive_fitter_sanity_snr15() -> None:
+    """Verify rewritten 4-symmetric-pair naive Lorentzian achieves median |B| error << 1 mT at SNR=15."""
+    rng = np.random.default_rng(TEST_SEED + 203)
+    test_vecs = np.array(
+        [
+            [1.15, 0.75, 0.40],
+            [0.35, 0.80, 1.65],
+            [0.20, 0.55, 1.10],
+            [0.60, 0.60, 1.40],
+            [0.45, 1.05, 2.15],
+        ],
+        dtype=np.float64,
+    )
+    cfg = HardwareNoiseConfig(
+        target_snr=15.0,
+        dwell_time_ms=0.8,
+        mains_freq_hz=50.0,
+        hum_amp=0.0015,
+        baseline_drift_amp=0.005,
+        pink_noise_ratio=0.25,
+    )
+    errs_ut = []
+    for i in range(25):
+        bv = test_vecs[i % len(test_vecs)]
+        b_true = float(np.linalg.norm(bv))
+        clean = simulate_clean_odmr(CANONICAL_FREQS, ODMRParams(b_field_mt=tuple(bv.tolist())))["spectrum"]
+        noisy = apply_realistic_noise(clean, cfg, rng=rng)
+        res = fit_lorentzian_naive(CANONICAL_FREQS, noisy)
+        assert np.isfinite(res["b_mag"])
+        assert np.all(np.isfinite(res["fitted_curve"]))
+        errs_ut.append(abs(float(res["b_mag"]) - b_true) * 1000.0)
+
+    med_ut = float(np.median(errs_ut))
+    # Acceptance criterion (Task 1c): median |B| error at SNR=15 well below 1 mT (1000 uT)
+    assert med_ut < 500.0
+
