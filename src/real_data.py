@@ -845,13 +845,47 @@ def audit_trianam_vs_sim_anatomy(
         resid_equal_axis = spec_norm - sim_equal_axis
         rms_equal_axis = float(np.sqrt(np.mean(resid_equal_axis ** 2)))
 
-        # (b) Per-axis weighted simulator fit (solving 4 non-negative axis amplitudes + linear baseline)
+        # (b) Per-axis weighted simulator fit (Stage 2.1: 4 non-negative axis amplitudes + linear baseline)
         X_weighted = np.column_stack([profs_eq.T, np.ones_like(u_grid), u_grid])
         coef_w, _, _, _ = np.linalg.lstsq(X_weighted, 1.0 - spec_norm, rcond=None)
         axis_amps_w = np.maximum(0.0, coef_w[:4])
         sim_weighted_axis = (1.0 - coef_w[4] - coef_w[5] * u_grid) - (axis_amps_w @ profs_eq)
         resid_weighted_axis = spec_norm - sim_weighted_axis
         rms_weighted_axis = float(np.sqrt(np.mean(resid_weighted_axis ** 2)))
+
+        # (c) Per-axis weighted + RF power tilt simulator fit (Stage 2.2: m(f) = 1 + c1*u + c2*(u^2 - 1/3))
+        u_rf = np.clip((freqs - D0_MHZ) * (1.0 / 120.0), -1.0, 1.0)
+        u2_rf = u_rf * u_rf - (1.0 / 3.0)
+        u2_grid = u_grid * u_grid - (1.0 / 3.0)
+
+        def _eval_tilted_fit(theta_t: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            c1_t, c2_t, hw_t, et_t, d0s_t = (
+                float(theta_t[0]),
+                float(theta_t[1]),
+                float(theta_t[2]),
+                float(theta_t[3]),
+                float(theta_t[4]),
+            )
+            m_env = 1.0 + c1_t * u_rf + c2_t * u2_rf
+            profs_t = _build_axis_profiles(hw_t, et_t, d0s_t) * m_env[None, :]
+            X_t = np.column_stack([profs_t.T, np.ones_like(u_grid), u_grid, u2_grid])
+            coef_t, _, _, _ = np.linalg.lstsq(X_t, 1.0 - spec_norm, rcond=None)
+            amps_t = np.maximum(0.0, coef_t[:4])
+            sim_t = (1.0 - coef_t[4] - coef_t[5] * u_grid - coef_t[6] * u2_grid) - (amps_t @ profs_t)
+            return sim_t, spec_norm - sim_t, m_env
+
+        res_tilt = least_squares(
+            lambda th: np.append(_eval_tilted_fit(th)[1], 0.005 * float(th[1])),
+            x0=np.array([0.0, 0.0, float(hw_eq), float(et_eq), float(d0s_eq)], dtype=np.float64),
+            bounds=(
+                np.array([-0.12, -0.12, 1.5, 0.0, -2.0]),
+                np.array([0.12, 0.12, 9.0, 1.0, 2.0]),
+            ),
+        )
+        sim_tilted_axis, resid_tilted_axis, m_env_opt = _eval_tilted_fit(res_tilt.x)
+        rms_tilted_axis = float(np.sqrt(np.mean(resid_tilted_axis ** 2)))
+        fitted_tilt_amp = float(np.max(np.abs(m_env_opt - 1.0)))
+        fitted_tilt_coeffs = [round(float(res_tilt.x[0]), 4), round(float(res_tilt.x[1]), 4)]
 
         # 6. Residual PSD slope (log10 PSD vs log10 normalized frequency on [f_1 .. f_Nyquist])
         fft_vals = np.fft.rfft(resid_weighted_axis - np.mean(resid_weighted_axis))
@@ -894,6 +928,9 @@ def audit_trianam_vs_sim_anatomy(
                 "residual_psd_log_slope": round(psd_slope, 3),
                 "equal_axis_sim_residual_rms": round(rms_equal_axis, 5),
                 "per_axis_weighted_sim_residual_rms": round(rms_weighted_axis, 5),
+                "per_axis_tilted_sim_residual_rms": round(rms_tilted_axis, 5),
+                "fitted_mw_power_tilt_amp": round(fitted_tilt_amp, 4),
+                "fitted_mw_power_tilt_coeffs": fitted_tilt_coeffs,
             }
         )
         plot_payloads.append(
@@ -903,8 +940,10 @@ def audit_trianam_vs_sim_anatomy(
                 "spec_norm": spec_norm,
                 "sim_equal": sim_equal_axis,
                 "sim_weighted": sim_weighted_axis,
+                "sim_tilted": sim_tilted_axis,
                 "resid_equal": resid_equal_axis,
                 "resid_weighted": resid_weighted_axis,
+                "resid_tilted": resid_tilted_axis,
                 "meta": trace_reports[-1],
             }
         )
@@ -916,7 +955,7 @@ def audit_trianam_vs_sim_anatomy(
         import matplotlib.pyplot as plt
 
         fig, axes = plt.subplots(
-            2, 4, figsize=(19.0, 7.6), sharex="col", gridspec_kw={"height_ratios": [2.2, 1.0]}
+            2, 4, figsize=(19.2, 8.2), sharex="col", gridspec_kw={"height_ratios": [2.25, 1.0]}
         )
         for col_i, item in enumerate(plot_payloads):
             ax_top = axes[0, col_i]
@@ -925,54 +964,85 @@ def audit_trianam_vs_sim_anatomy(
             f_arr = item["freqs"]
 
             ax_top.plot(
-                f_arr, item["spec_norm"], color="#111111", lw=1.35, label="Real Experimental (trianam)"
+                f_arr, item["spec_norm"], color="#111111", lw=1.30, alpha=0.85, label="Real Experimental (trianam)"
             )
             ax_top.plot(
                 f_arr,
                 item["sim_equal"],
                 color="#d62728",
                 ls="--",
-                lw=1.35,
-                label=f"Sim Equal-Axis (RMS={m['equal_axis_sim_residual_rms']:.4f})",
+                lw=1.30,
+                label=f"Sim Equal-Axis (RMS={m['equal_axis_sim_residual_rms']:.5f})",
             )
             ax_top.plot(
                 f_arr,
                 item["sim_weighted"],
                 color="#1f77b4",
                 ls="-.",
-                lw=1.35,
-                label=f"Sim Per-Axis Weighted (RMS={m['per_axis_weighted_sim_residual_rms']:.4f})",
+                lw=1.30,
+                label=f"Sim Per-Axis Weighted (RMS={m['per_axis_weighted_sim_residual_rms']:.5f})",
+            )
+            ax_top.plot(
+                f_arr,
+                item["sim_tilted"],
+                color="#2ca02c",
+                ls="-",
+                lw=1.40,
+                label=f"Sim Per-Axis + RF Tilt (RMS={m['per_axis_tilted_sim_residual_rms']:.5f})",
             )
             ax_top.set_title(
                 f"{m['trace_id']} (|B|={m['ground_truth_b_mt']:.3f} mT)\n"
                 f"D0={m['hamiltonian_d0_mhz']:.2f} MHz (dD0=+{m['hamiltonian_d0_offset_mhz']:.2f}), "
                 f"HWHM_hf={m['hyperfine_triplet_hwhm_mhz']:.2f} MHz\n"
-                f"Axis Asym={m['exp_inter_axis_depth_ratio_max_over_min']:.2f}x (Sim Equal={m['sim_equal_axis_cf_ratio_max_over_min']:.2f}x)",
-                fontsize=8.5,
+                f"Axis Asym={m['exp_inter_axis_depth_ratio_max_over_min']:.2f}x, "
+                f"RF Tilt={m['fitted_mw_power_tilt_amp']*100:.1f}%",
+                fontsize=8.3,
                 fontweight="bold",
             )
             ax_top.grid(True, linestyle=":", alpha=0.45)
-            ax_top.legend(loc="lower right", fontsize=7.2)
+            ax_top.legend(loc="lower right", fontsize=6.8)
 
             ax_bot.axhline(0.0, color="#666666", lw=0.8, ls=":")
             ax_bot.plot(
-                f_arr, item["resid_equal"], color="#d62728", lw=0.95, alpha=0.85, label="Equal-Axis Resid"
+                f_arr,
+                item["resid_equal"],
+                color="#d62728",
+                lw=0.85,
+                ls="--",
+                alpha=0.80,
+                label=f"Equal-Axis (RMS={m['equal_axis_sim_residual_rms']:.5f})",
             )
             ax_bot.plot(
-                f_arr, item["resid_weighted"], color="#1f77b4", lw=0.95, alpha=0.90, label="Per-Axis Weighted Resid"
+                f_arr,
+                item["resid_weighted"],
+                color="#1f77b4",
+                lw=0.85,
+                ls="-.",
+                alpha=0.85,
+                label=f"Per-Axis (RMS={m['per_axis_weighted_sim_residual_rms']:.5f})",
+            )
+            ax_bot.plot(
+                f_arr,
+                item["resid_tilted"],
+                color="#2ca02c",
+                lw=1.00,
+                ls="-",
+                alpha=0.95,
+                label=f"Per-Axis+RF Tilt (RMS={m['per_axis_tilted_sim_residual_rms']:.5f})",
             )
             ax_bot.set_xlabel("Microwave Frequency (MHz)", fontsize=9)
             ax_bot.grid(True, linestyle=":", alpha=0.45)
+            ax_bot.legend(loc="upper right", fontsize=6.5)
             if col_i == 0:
                 ax_top.set_ylabel("Norm. Fluorescence", fontsize=9.5)
                 ax_bot.set_ylabel("Residual (Exp - Sim)", fontsize=9.5)
-                ax_bot.legend(loc="upper right", fontsize=7.0)
 
         fig.suptitle(
-            "OpenNV-Denoise Stage 2.1 — Spectral Anatomy Comparison: Real Experimental (Haim et al. 2024) vs. Spin-1 Simulator",
-            fontsize=11.5,
+            "OpenNV-Denoise Stage 2.2 — Real Experimental (trianam) vs. Simulator: Equal-Axis vs. Per-Axis vs. Per-Axis + RF Power Tilt\n"
+            "[SIM-TO-REAL STATUS: trianam HWHM_hf (2.75–2.96 MHz) in train_sim2real [2.0, 9.0] MHz | Axis Asym (1.44x–1.60x) in train_sim2real [1.0, 2.0]x | RF Tilt in <=12%]",
+            fontsize=10.5,
             fontweight="bold",
-            y=1.02,
+            y=1.03,
         )
         fig.tight_layout()
         fig_path.parent.mkdir(parents=True, exist_ok=True)

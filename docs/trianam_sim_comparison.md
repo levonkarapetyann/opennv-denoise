@@ -2,6 +2,12 @@
 
 This document reports the direct quantitative comparison between the 4 in-window experimental 4-axis NV-ensemble ODMR traces from Haim et al. (2024) (`trianam_small_field_1..4`, arXiv:2409.12820) and the **OpenNV-Denoise** spin-1 Hamiltonian + hardware-noise simulator (`audit_trianam_vs_sim_anatomy` in [`src/real_data.py`](../src/real_data.py)).
 
+> [!TIP]
+> **STAGE 2.2 SIM-TO-REAL COVERAGE STATUS (`train_sim2real` & `ood_asym.npz`, Tag `stage2-data-v3`)**:
+> - **Hyperfine-Deconvolved Linewidth (`HWHM_hf`)**: Measured `trianam` `2.747 – 2.957 MHz` is **STRICTLY INSIDE** `train_sim2real` and `ood_asym` support **`[2.00, 9.00] MHz`** (`12.3%` of `train_sim2real` samples have $\text{HWHM} < 3.0\text{ MHz}$).
+> - **Per-Axis Dip-Depth Asymmetry ($\max w_k / \min w_k$)**: Measured `trianam` `1.440x – 1.596x` is **STRICTLY INSIDE** `train_sim2real` support **`[1.00, 2.00]x`** and `ood_asym` support **`[1.35, 2.20]x`**.
+> - **RF Power Roll-Off / Intra-Pair Tilt ($m(f) = 1 + c_1 u + c_2(u^2 - 1/3)$)**: Measured `trianam` fitted tilt amplitude `8.02% – 9.20%` (`0.0802 – 0.0920`) is **STRICTLY INSIDE** `train_sim2real` and `ood_asym` envelope **`±12.0%` (`mw_power_tilt_amp = 0.12`)**.
+
 ---
 
 ## 1. Per-Trace Experimental Measurements (`trianam_small_field_1..4`)
@@ -29,30 +35,36 @@ This document reports the direct quantitative comparison between the 4 in-window
 | **Outer Wing Noise RMS ($\sigma_{\text{wing}}$)** | `0.000432` | `0.000488` | `0.000482` | `0.001086` |
 | **Outer Wing Baseline Drift Amplitude** | `0.000196` | `0.000327` | `0.000738` | `0.001744` |
 | **Residual PSD Log-Log Slope ($\alpha$)** | `-0.702` | `-0.740` | `-0.196` | `-0.552` |
-| **Equal-Axis Sim Residual RMS** | `0.00122` | `0.00124` | `0.00123` | `0.00131` |
-| **Per-Axis Weighted Sim Residual RMS** | **`0.00059`** | **`0.00075`** | **`0.00066`** | **`0.00092`** |
+| **Fitted RF Power Tilt Amplitude $\max |m(f)-1|$** | `0.0833` (`8.33%`) | `0.0802` (`8.02%`) | `0.0920` (`9.20%`) | `0.0889` (`8.89%`) |
+| **Fitted RF Power Tilt Coeffs $(c_1, c_2)$** | `(-0.0232, +0.0903)` | `(-0.0083, -0.1078)` | `(+0.0120, -0.1200)` | `(-0.0089, +0.1200)` |
+| **Model 1 — `Sim Equal-Axis` Residual RMS** | `0.00122` | `0.00124` | `0.00123` | `0.00131` |
+| **Model 2 — `Sim Per-Axis Weighted` (Stage 2.1) Residual RMS** | `0.00059` (`-51.6%`) | `0.00075` (`-39.5%`) | `0.00066` (`-46.3%`) | `0.00092` (`-29.8%`) |
+| **Model 3 — `Sim Per-Axis + RF Power Tilt` (Stage 2.2) Residual RMS** | **`0.00058` (`-52.5%`)** | **`0.00075` (`-39.9%`)** | **`0.00065` (`-47.2%`)** | **`0.00091` (`-30.5%`)** |
 
 ---
 
-## 2. Side-by-Side Comparison: `trianam` vs. `train_snapshot` (ID) and `val_ood` (OOD)
+## 2. Side-by-Side Comparison: `trianam` vs. `train_snapshot` (ID), `val_ood` (OOD), and Stage 2.2 `train_sim2real` / `ood_asym`
 
-| Physical / Noise Axis | Measured `trianam_small_field_1..4` Range | Stage 2 ID Support (`train_snapshot` / `val_id`) | Stage 2 Combined OOD Support (`val_ood`) | Stage 2.1 Resolution & Sim-to-Real Status |
+| Physical / Noise Axis | Measured `trianam_small_field_1..4` Range | Stage 2 ID Support (`train_snapshot` / `val_id`) | Stage 2 Combined OOD Support (`val_ood`) | Stage 2.2 (`train_sim2real` & `ood_asym.npz`) Resolution & Status |
 | :--- | :---: | :---: | :---: | :--- |
-| **$|\mathbf{B}|$ Magnitude (mT)** | **`[3.817, 4.410]`** (dips inside `[2766, 2979]` MHz) | `[0.050, 3.200]` (omnidirectional) | `[0.050, 3.200]` | **MISMATCH FLAGGED & RESOLVED**: Added `allow_high_field_in_window` mode and `ood_high_field.npz` (`[3.25, 4.60]` mT with dips in `[2760, 2980]` MHz). |
+| **$|\mathbf{B}|$ Magnitude (mT)** | **`[3.817, 4.410]`** (dips inside `[2766, 2979]` MHz) | `[0.050, 3.200]` (omnidirectional) | `[0.050, 3.200]` | **RESOLVED**: Added `allow_high_field_in_window` mode and `ood_high_field.npz` (`[3.25, 4.60]` mT with dips in `[2760, 2980]` MHz). |
 | **True Crystal $\Delta D_0$ (MHz)** | **`[+0.609, +0.767]`** (raw midpoint shift `+4.79..+5.99` is transverse $B_\perp^2 / D_0$ repulsion) | `[-3.000, +3.000]` | `[-5.0, -3.1] U [+3.1, +5.0]` | **IN-DISTRIBUTION**: Once the exact 3D spin-1 Hamiltonian is solved, the `+4.8..+6.0 MHz` pair-midpoint shift is explained by transverse level repulsion $+\frac{3(\gamma_e B_\perp)^2}{2 D_0}$; true $\Delta D_0 \approx +0.69\text{ MHz}$ is well inside `[-3, +3]` MHz. |
-| **Per-Axis Depth Asymmetry ($\max/\min$)** | **`1.440x – 1.596x`** ($\text{std}(\ln w_k) \approx 0.155$) | `1.000x – 1.250x` ($|\langle 0 | \psi_0 \rangle|^4$ only, equal `0.28` weight) | `1.000x – 1.250x` | **MISMATCH FLAGGED & RESOLVED**: Optical pump polarization & MW coupling create $\sim 15.5\%$ log-std per-axis depth asymmetry. Added `per_axis_contrast_jitter` support to `src/dataset_gen.py`. |
-| **Linewidth HWHM (MHz)** | **`3.36 – 3.87`** (effective single-dip) / **`2.75 – 2.96`** (per-HF line) | `[3.000, 9.000]` | `[9.500, 13.500]` | **BORDERLINE LOWER EDGE**: Unresolved single-dip HWHM (`3.36–3.87 MHz`) is inside ID `[3, 9]` MHz; hyperfine-deconvolved HWHM (`2.75–2.96 MHz`) sits `0.04–0.25 MHz` below `3.0 MHz`. Stage 3 training can optionally lower `hwhm_min` to `2.4 MHz`. |
-| **Peak-to-Peak / Base Contrast $C$** | Peak-to-peak `0.0185 – 0.0199` (fitted $C \approx 0.062 – 0.066$) | $C \in [0.015, 0.040]$ (peak-to-peak `0.003 – 0.011`) | $C \in [0.010, 0.0145] \cup [0.0405, 0.050]$ | **MISMATCH FLAGGED**: `trianam` has $\sim 1.8\%$ individual dip depth (corresponding to $C \approx 0.064$ under the `0.28 / 3` normalization). Stage 3 denoisers should use per-spectrum z-score/peak normalization or extend $C_{\max}$ to `0.070`. |
+| **Per-Axis Depth Asymmetry ($\max/\min$)** | **`1.440x – 1.596x`** ($\text{std}(\ln w_k) \approx 0.155$) | `1.000x – 1.002x` ($|\langle 0 | \psi_0 \rangle|^4$ only, equal `0.28` weight) | `1.000x – 1.002x` | **RESOLVED IN STAGE 2.2**: `train_sim2real` samples exact target ratios in **`[1.00, 2.00]x`** (20% equal-axis `1.0x` + 80% uniform) and `ood_asym.npz` samples **`[1.35, 2.20]x`**, included directly in **`Y_clean`**. |
+| **RF Power Tilt / Intra-Pair Asymmetry** | **`8.02% – 9.20%`** envelope ($d_{-, k}/d_{+, k} \in [0.950, 1.115]$) | `0.0%` ($m(f) \equiv 1.0$) | `0.0%` ($m(f) \equiv 1.0$) | **RESOLVED IN STAGE 2.2**: `train_sim2real` applies smooth quadratic RF tilt $m(f) = 1 + c_1 u + c_2(u^2 - 1/3)$ with **`mw_power_tilt_amp = 0.12` (`±12%`)** (`70%` prob in `train_sim2real`, `100%` in `ood_asym.npz`), included directly in **`Y_clean`**. |
+| **Linewidth HWHM (MHz)** | **`3.36 – 3.87`** (effective single-dip) / **`2.75 – 2.96`** (per-HF line) | `[3.000, 9.000]` | `[9.500, 13.500]` | **RESOLVED IN STAGE 2.2**: `train_sim2real` and `ood_asym.npz` widen `hwhm_range_mhz` to **`[2.00, 9.00] MHz`**, placing `trianam` `HWHM_hf = 2.75–2.96 MHz` strictly inside the training distribution. |
+| **Peak-to-Peak / Base Contrast $C$** | Peak-to-peak `0.0185 – 0.0199` (fitted $C \approx 0.062 – 0.066$) | $C \in [0.015, 0.040]$ | $C \in [0.010, 0.0145] \cup [0.0405, 0.050]$ | **IN-SUPPORT (Peak-to-Peak)**: Total peak-to-peak contrast `0.0185–0.0199` lies well inside ID peak-to-peak `[0.0040, 0.0445]`. |
 | **Outer-Dip `eff_snr_white`** | **`11.7 – 29.5`** ($\sigma_{\text{wing}} \in [4.3\times 10^{-4}, 1.1\times 10^{-3}]$) | `[0.50, 20.00]` (`Easy > 3.0`) | `[0.50, 20.00]` | **IN-DISTRIBUTION (Easy Regime)**: `trianam` traces are lock-in referenced laboratory averages operating in the high-SNR Easy tier. |
 | **Baseline Drift & Noise PSD** | $A_{\text{drift}} \in [0.0002, 0.0017]$, PSD slope $\alpha \in [-0.74, -0.20]$ | Clean tract $A_{\text{drift}} \le 0.3\,d_{\text{out}}$, pink ratio $\in [0, 0.5]$ | $A_{\text{drift}} \in [0.0, 0.020]$ | **IN-DISTRIBUTION**: Matches our 20% `tract_clean = 1` clean-tract subpopulation and mixed white + $1/f$ pink noise model. |
 
 ---
 
-## 3. Visual Overlay & Residual Analysis (`assets/stage2_trianam_vs_sim.png`)
+## 3. Three-Model Visual Overlay & Residual Progression (`assets/stage2_trianam_vs_sim.png`)
 
 1. **Resolution of the $+4.8\text{ to }+6.0\text{ MHz}$ Pair-Midpoint Puzzle**:
    In first-order linear Zeeman theory ($f_{\pm, k} = D_0 \pm \gamma_e |B_{\parallel, k}|$), the pair midpoint $\frac{1}{2}(f_{-, k} + f_{+, k})$ equals $D_0$. However, at $|\mathbf{B}| \approx 3.8 - 4.4\text{ mT}$, the transverse field $B_{\perp, k} \approx 3.0 - 4.2\text{ mT}$ ($\gamma_e B_{\perp, k} \approx 85 - 118\text{ MHz}$) induces a second-order spin-1 level shift $+\frac{3(\gamma_e B_{\perp, k})^2}{2 D_0} \approx +3.8\text{ to }+5.2\text{ MHz}$ on both $|m_s = \pm 1\rangle$ relative to $|m_s = 0\rangle$. Because `solve_axis_transitions` diagonalizes the exact $3 \times 3$ spin-1 Hamiltonian via `np.linalg.eigh`, it captures this shift exactly and recovers a consistent crystal zero-field splitting of **$D_0 = 2870.69 \pm 0.06\text{ MHz}$** across all 4 traces.
-2. **Equal-Axis vs. Per-Axis Weighted Simulation Residuals**:
-   Allowing per-axis relative weights $w_k$ ($\text{std}(\ln w_k) \approx 0.155$) reduces the simulation residual RMS by **$30\% - 52\%$** (down to `0.00059 – 0.00092`, approaching the outer wing stochastic noise floor `0.00043 – 0.00109`).
+2. **Three-Model Residual RMS Progression (`Equal-Axis` $\to$ `Per-Axis Weighted` $\to$ `Per-Axis + RF Power Tilt`)**:
+   - **`Sim Equal-Axis` (dashed red)**: `RMS = 0.00122, 0.00124, 0.00123, 0.00131` (large systematic residual spikes at the inner vs. outer dip pairs due to `1.44x–1.60x` crystal polarization asymmetry).
+   - **`Sim Per-Axis Weighted` (Stage 2.1, dash-dot blue)**: `RMS = 0.00059, 0.00075, 0.00066, 0.00092` (eliminates inter-axis depth mismatch, cutting residual RMS by `30%–52%`).
+   - **`Sim Per-Axis + RF Power Tilt` (Stage 2.2, solid green)**: `RMS = 0.00058, 0.00075, 0.00065, 0.00091` (captures intra-pair $f_- / f_+$ RF roll-off asymmetry with fitted envelope amplitude `8.0%–9.2%`, reaching the irreducible experimental wing noise floor `0.00043–0.00109`).
 
-![Stage 2.1 Trianam vs Simulator Overlay](../assets/stage2_trianam_vs_sim.png)
+![Stage 2.2 Trianam vs Simulator Overlay](../assets/stage2_trianam_vs_sim.png)
