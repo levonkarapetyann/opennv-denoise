@@ -1,0 +1,187 @@
+{
+  "stage": "Stage 2 (stage2-data-v1)",
+  "generated_at_utc": "2026-11-19T13:51:51.404588+00:00",
+  "canonical_grid": {
+    "freq_min_mhz": 2750.0,
+    "freq_max_mhz": 2990.0,
+    "n_points": 512,
+    "d0_mhz": 2870.0,
+    "e_mhz": 0.0
+  },
+  "on_the_fly_train_seed": 20260101,
+  "dry_run_twin_verification": {
+    "twin_test_id": {
+      "split": "twin_test_id",
+      "n_samples": 4000,
+      "regime_counts": [
+        1333,
+        1333,
+        1334
+      ],
+      "max_f64_identity_err": 0.0,
+      "max_f32_identity_err": 0.0,
+      "max_clean_sim_err": 3.4416913763379853e-15,
+      "max_splittings_eigh_err": 7.441096840921091e-06,
+      "b_mag_order2_vs_true_rms_ut": 0.00013606853137577139,
+      "temp_sha256": "7cc8549708656e488c3ce9362d24895cf7f588f1627cff9f2790f280c84cf618",
+      "deleted_after_check": true
+    },
+    "twin_test_ood": {
+      "split": "twin_test_ood",
+      "n_samples": 4000,
+      "regime_counts": [
+        1333,
+        1333,
+        1334
+      ],
+      "max_f64_identity_err": 0.0,
+      "max_f32_identity_err": 0.0,
+      "max_clean_sim_err": 3.6637359812630166e-15,
+      "max_splittings_eigh_err": 7.6097626333648805e-06,
+      "b_mag_order2_vs_true_rms_ut": 0.00013559473612986784,
+      "temp_sha256": "4a2683ce17258a2bf53fa69323c0d923f494f2056cec0025fb697cbe43bf9da9",
+      "deleted_after_check": true
+    }
+  },
+  "splits": {
+    "train_snapshot": {
+      "file": "train_snapshot.npz",
+      "split_seed": 20260102,
+      "n_samples": 20000,
+      "stratified_regimes": false,
+      "factor_ablation_id": 0,
+      "factor_ablation_name": "id_standard",
+      "sha256": "37761c3d40349ae3c0336f208074be2fc33035b1420642f2a2b38b28af4791e8",
+      "generation_time_sec": 20.748,
+      "throughput_spectra_per_sec": 963.9
+    },
+    "val_id": {
+      "file": "val_id.npz",
+      "split_seed": 20260201,
+      "n_samples": 4000,
+      "stratified_regimes": true,
+      "factor_ablation_id": 0,
+      "factor_ablation_name": "id_standard",
+      "sha256": "294efabc236b362340078d789282654085915e3bb68648f6165573c4f41a48cc",
+      "generation_time_sec": 3.637,
+      "throughput_spectra_per_sec": 1099.9
+    },
+    "val_ood": {
+      "file": "val_ood.npz",
+      "split_seed": 20260202,
+      "n_samples": 4000,
+      "stratified_regimes": true,
+      "factor_ablation_id": 8,
+      "factor_ablation_name": "ood_combined",
+      "sha256": "014df8d74cab853b09771a114750db2fce5afd194c48e96d3d4098d3e4026dfa",
+      "generation_time_sec": 4.52,
+      "throughput_spectra_per_sec": 885.0
+    },
+    "ood_hwhm": {
+      "file": "ood_hwhm.npz",
+      "split_seed": 20260301,
+      "n_samples": 1000,
+      "stratified_regimes": false,
+      "factor_ablation_id": 1,
+      "factor_ablation_name": "ood_hwhm",
+      "sha256": "643cb17ffd93f0d41fe45fac48dfc88a3e404822846f611a075ef910a4838b19",
+      "generation_time_sec": 0.888,
+      "throughput_spectra_per_sec": 1126.3
+    },
+    "ood_contrast": {
+      "file": "ood_contrast.npz",
+      "split_seed": 20260302,
+      "n_samples": 1000,
+      "stratified_regimes": false,
+      "factor_ablation_id": 2,
+      "factor_ablation_name": "ood_contrast",
+      "sha256": "9396e1f3efc8b3ee7fb264c0564f4cf0c7ebbd127389b787f226a52f8b4e30a6",
+      "generation_time_sec": 0.865,
+      "throughput_spectra_per_sec": 1155.9
+    },
+    "ood_d0": {
+      "file": "ood_d0.npz",
+      "split_seed": 20260303,
+      "n_samples": 1000,
+      "stratified_regimes": false,
+      "factor_ablation_id": 3,
+      "factor_ablation_name": "ood_d0",
+      "sha256": "501e98151a698d6e97cf012828d65e99328ce2b46975a1a6f108367304b2645a",
+      "generation_time_sec": 0.882,
+      "throughput_spectra_per_sec": 1133.9
+    },
+    "ood_noise": {
+      "file": "ood_noise.npz",
+      "split_seed": 20260304,
+      "n_samples": 1000,
+      "stratified_regimes": false,
+      "factor_ablation_id": 4,
+      "factor_ablation_name": "ood_noise",
+      "sha256": "9c6bbd457165dca0aa73d7c5a190461047d2b62a850ecd3484f59a2c24735c8b",
+      "generation_time_sec": 0.901,
+      "throughput_spectra_per_sec": 1110.5
+    },
+    "ood_drift": {
+      "file": "ood_drift.npz",
+      "split_seed": 20260305,
+      "n_samples": 1000,
+      "stratified_regimes": false,
+      "factor_ablation_id": 5,
+      "factor_ablation_name": "ood_drift",
+      "sha256": "c75b7c630e7ffe975c23f397708ea4c56af1408af6017c50eaf4d55f058181c4",
+      "generation_time_sec": 0.866,
+      "throughput_spectra_per_sec": 1154.7
+    },
+    "ood_hum": {
+      "file": "ood_hum.npz",
+      "split_seed": 20260306,
+      "n_samples": 1000,
+      "stratified_regimes": false,
+      "factor_ablation_id": 6,
+      "factor_ablation_name": "ood_hum",
+      "sha256": "9b57ed282f1a5320da09dd0373d145a118e7660a3f76f72b7479e5b7be67c340",
+      "generation_time_sec": 1.061,
+      "throughput_spectra_per_sec": 942.4
+    },
+    "ood_grid": {
+      "file": "ood_grid.npz",
+      "split_seed": 20260307,
+      "n_samples": 1000,
+      "stratified_regimes": false,
+      "factor_ablation_id": 7,
+      "factor_ablation_name": "ood_grid",
+      "sha256": "f7998fbb6d7da6fdba218b0fb0b03838d3fca4371a68fac4648bc08fd6dad0c7",
+      "generation_time_sec": 1.45,
+      "throughput_spectra_per_sec": 689.6
+    },
+    "test_id": {
+      "file": "test_id.npz",
+      "split_seed": 20260901,
+      "n_samples": 4000,
+      "stratified_regimes": true,
+      "factor_ablation_id": 0,
+      "factor_ablation_name": "id_standard",
+      "sha256": "819e007a1a3fbc45d52df4334fd0ce6906f7e59e31cd22204b023383d63cbf79",
+      "locked_test_set": true,
+      "generation_time_sec": 3.373,
+      "throughput_spectra_per_sec": 1186.0
+    },
+    "test_ood": {
+      "file": "test_ood.npz",
+      "split_seed": 20260902,
+      "n_samples": 4000,
+      "stratified_regimes": true,
+      "factor_ablation_id": 8,
+      "factor_ablation_name": "ood_combined",
+      "sha256": "fcdce8033fb0d04cfd5cb7c5ea92b1b9ee7fbfd457556bba00c8a3e02ce627e7",
+      "locked_test_set": true,
+      "generation_time_sec": 4.123,
+      "throughput_spectra_per_sec": 970.2
+    }
+  },
+  "test_access_counts": {
+    "data_read": 0,
+    "hash_check": 2,
+    "write_once": 2
+  }
+}

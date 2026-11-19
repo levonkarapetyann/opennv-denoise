@@ -1,0 +1,974 @@
+{
+  "stage": "Stage 2 Real Experimental Evaluation Manifest (Evaluation/QA Only \u2014 Never Used for Training/Tuning)",
+  "generated_at_utc": "2026-11-19T13:46:38.023011+00:00",
+  "policy": "No real data is used for training, hyperparameter selection, or threshold tuning.",
+  "candidate_sources_audit": [
+    {
+      "source_id": "github_trianam_ml_magnetic_sensing",
+      "url": "https://github.com/trianam/machineLearningMagneticSensing",
+      "paper_citation": "Galya Haim, Stefano Martina, John Howell, Nir Bar-Gill, and Filippo Caruso (2024), 'Machine-learning based high-bandwidth magnetic sensing', arXiv:2409.12820.",
+      "license": "GPL-3.0",
+      "status": "imported",
+      "actual_contents": "Contains experimental 4-axis NV ensemble ODMR spectra in MATLAB .mat format under data/galya/small_field/{1,2,3,4} (270-300 pts, 2730-3000/3030 MHz, with calibrated ground-truth |B| in [3.817, 4.410] mT, angles (theta, phi), and 3-axis Helmholtz coil currents I_helm) and data/galya/{1,2,3,4} (higher-field spectra with |B| in [4.832, 10.187] mT). Folder 1 uses MATLAB v7.3 HDF5 format (not imported); small_field/1..4 and folders 2..4 (7 traces total) were imported directly."
+    },
+    {
+      "source_id": "zenodo_14697917",
+      "url": "https://zenodo.org/records/14697917",
+      "paper_citation": "Elke Neu and Oshnik Nimba (2025), 'Dataset for: Nitrogen-Vacancy Centers in Epitaxial Laterally Overgrown Diamond: Towards Up-scaling of Color Center-based Quantum Technologies', Zenodo, DOI: 10.5281/zenodo.14697917.",
+      "license": "CC-BY-4.0",
+      "status": "inspected_and_flagged_incompatible",
+      "actual_contents": "Contains 105 single-NV zero-field strain-splitting ODMR .txt traces in GHz under Data/ODMR/{Hole2,Hole3,NoHole3,NoHole5}/ (plus Ramsey/Spin-Echo files and surface profiles). 3 representative single-NV ODMR files were downloaded and run through the loader: their frequency ranges are [2.850, 2.890] GHz ([2850, 2890] MHz), [2.855, 2.880] GHz ([2855, 2880] MHz), and [2.840, 2.890] GHz ([2840, 2890] MHz). Because they do not cover the required central region [2830.0, 2910.0] MHz, all 3 are deterministically flagged incompatible (never padded)."
+    },
+    {
+      "source_id": "github_quantumvillage_uncutgem",
+      "url": "https://github.com/QuantumVillage/UncutGem",
+      "paper_citation": "Mark Carney and Victoria Kumaran (2025), 'Uncut Gem - A Fully Open-Source, Hackable Quantum Sensor', v0.1.0, GitHub.",
+      "license": "AGPL-3.0",
+      "status": "inspected_no_raw_odmr_traces",
+      "actual_contents": "Full git tree inspected: contains KiCad PCB designs, 3D-printed mount STL/STEP files, ESP32/ADF4350 Arduino sweep firmware (firmware/src/uncut-gem.ino), and two Jupyter notebooks (jupyter/UncutGem-SensorNotebook.ipynb, jupyter/uncut_measure_clean.ipynb) for live serial port plotting over /dev/cu.usbserial-*. Contains NO saved raw ODMR spectrum files."
+    }
+  ],
+  "summary_counts": {
+    "total_inspected_local_traces": 10,
+    "compatible_with_central_2830_2910_mhz": 7,
+    "usable_untruncated_on_canonical_2750_2990_mhz": 3,
+    "flagged_incompatible_narrow_window": 3
+  },
+  "usable_untruncated_trace_ids": [
+    "trianam_small_field_1",
+    "trianam_small_field_2",
+    "trianam_small_field_3"
+  ],
+  "compatible_central_trace_ids": [
+    "trianam_small_field_1",
+    "trianam_small_field_2",
+    "trianam_small_field_3",
+    "trianam_small_field_4",
+    "trianam_folder_2_101G",
+    "trianam_folder_3_48G_hf",
+    "trianam_folder_4_69G"
+  ],
+  "incompatible_trace_ids": [
+    "zenodo14697917_Hole2_05-23-2023_03-01_ODMR_0.1_MHz_-25_dBm_LSPM2021A_NV1",
+    "zenodo14697917_Hole3_05-06-2023_10-01_ODMR_0.1_MHz_-25_dBm_LSPM2021A_NV1",
+    "zenodo14697917_Hole3_05-09-2023_20-03_ODMR_0.1_MHz_-20_dBm_LSPM2021A_NV10"
+  ],
+  "helmholtz_coil_linearity_qa": {
+    "n_coil_settings": 4,
+    "trace_ids": [
+      "trianam_small_field_1",
+      "trianam_small_field_2",
+      "trianam_small_field_3",
+      "trianam_small_field_4"
+    ],
+    "coil_current_l2_norms_amp": [
+      4.6184,
+      5.0577,
+      5.1971,
+      5.3935
+    ],
+    "ground_truth_b_mt": [
+      3.817,
+      4.1862,
+      4.2887,
+      4.4104
+    ],
+    "pair_splitting_estimated_b_mt": [
+      3.8029,
+      4.1814,
+      4.2874,
+      4.3836
+    ],
+    "pearson_r_coil_norm_vs_true_b": 0.99766,
+    "pearson_r_coil_norm_vs_estimated_b": 0.9938,
+    "pair_splitting_b_mag_mae_ut": 11.75
+  },
+  "traces": [
+    {
+      "trace_id": "trianam_small_field_1",
+      "source_name": "GitHub trianam/machineLearningMagneticSensing",
+      "license": "GPL-3.0",
+      "citation": "Haim et al. (2024), 'Machine-learning based high-bandwidth magnetic sensing', arXiv:2409.12820",
+      "nv_type": "4-axis NV ensemble",
+      "original_points": 270,
+      "original_frequency_unit": "MHz",
+      "original_freq_range_mhz": [
+        2730.0,
+        3000.0
+      ],
+      "spectrum_convention": "positive_contrast",
+      "compatible_central_2830_2910": true,
+      "usable_untruncated_on_canonical_2750_2990": true,
+      "out_of_range_or_dips_outside_canonical": false,
+      "dips_outside_canonical_2750_2990": false,
+      "valid_canonical_points": 512,
+      "window_padded": false,
+      "incompatible_reason": null,
+      "ground_truth_b_mt": 3.817,
+      "ground_truth_angles_deg": [
+        25.5755,
+        67.3352
+      ],
+      "helmholtz_coil_currents_amp": [
+        0.7,
+        2.2,
+        4.0
+      ],
+      "helmholtz_coil_norm_amp": 4.6184,
+      "qa_checks_supported": {
+        "pair_centre_symmetry_about_d0": true,
+        "linearity_vs_coil_current": true,
+        "ground_truth_b_mag_comparison": true
+      },
+      "qa_results": {
+        "n_visible_dips": 8,
+        "visible_dip_freqs_mhz": [
+          2782.19,
+          2805.28,
+          2834.39,
+          2855.46,
+          2896.62,
+          2916.69,
+          2944.8,
+          2962.86
+        ],
+        "selected_pair_dips_mhz": [
+          2782.19,
+          2805.28,
+          2834.39,
+          2855.46,
+          2896.62,
+          2916.69,
+          2944.8,
+          2962.86
+        ],
+        "supports_pair_symmetry": true,
+        "pair_centres_mhz": [
+          2872.528,
+          2875.037,
+          2875.539,
+          2876.041
+        ],
+        "pair_splittings_mhz": [
+          41.152,
+          82.305,
+          139.517,
+          180.669
+        ],
+        "mean_pair_centre_mhz": 2874.786,
+        "pair_centre_std_mhz": 1.351,
+        "estimated_b_mag_mt": 3.8029
+      },
+      "notes": "4-axis NV ensemble, 270 pts [2730, 3000] MHz, Helmholtz coil setting 1 (38.170 G)."
+    },
+    {
+      "trace_id": "trianam_small_field_2",
+      "source_name": "GitHub trianam/machineLearningMagneticSensing",
+      "license": "GPL-3.0",
+      "citation": "Haim et al. (2024), 'Machine-learning based high-bandwidth magnetic sensing', arXiv:2409.12820",
+      "nv_type": "4-axis NV ensemble",
+      "original_points": 270,
+      "original_frequency_unit": "MHz",
+      "original_freq_range_mhz": [
+        2730.0,
+        3000.0
+      ],
+      "spectrum_convention": "positive_contrast",
+      "compatible_central_2830_2910": true,
+      "usable_untruncated_on_canonical_2750_2990": true,
+      "out_of_range_or_dips_outside_canonical": false,
+      "dips_outside_canonical_2750_2990": false,
+      "valid_canonical_points": 512,
+      "window_padded": false,
+      "incompatible_reason": null,
+      "ground_truth_b_mt": 4.1862,
+      "ground_truth_angles_deg": [
+        23.1206,
+        67.5789
+      ],
+      "helmholtz_coil_currents_amp": [
+        0.7,
+        2.2,
+        4.5
+      ],
+      "helmholtz_coil_norm_amp": 5.0577,
+      "qa_checks_supported": {
+        "pair_centre_symmetry_about_d0": true,
+        "linearity_vs_coil_current": true,
+        "ground_truth_b_mag_comparison": true
+      },
+      "qa_results": {
+        "n_visible_dips": 9,
+        "visible_dip_freqs_mhz": [
+          2776.17,
+          2797.25,
+          2829.37,
+          2851.45,
+          2875.54,
+          2904.65,
+          2925.72,
+          2950.82,
+          2969.89
+        ],
+        "selected_pair_dips_mhz": [
+          2776.17,
+          2797.25,
+          2829.37,
+          2851.45,
+          2904.65,
+          2925.72,
+          2950.82,
+          2969.89
+        ],
+        "supports_pair_symmetry": true,
+        "pair_centres_mhz": [
+          2873.03,
+          2874.033,
+          2877.546,
+          2878.048
+        ],
+        "pair_splittings_mhz": [
+          53.197,
+          96.357,
+          153.569,
+          193.717
+        ],
+        "mean_pair_centre_mhz": 2875.664,
+        "pair_centre_std_mhz": 2.169,
+        "estimated_b_mag_mt": 4.1814
+      },
+      "notes": "4-axis NV ensemble, 270 pts [2730, 3000] MHz, Helmholtz coil setting 2 (41.862 G)."
+    },
+    {
+      "trace_id": "trianam_small_field_3",
+      "source_name": "GitHub trianam/machineLearningMagneticSensing",
+      "license": "GPL-3.0",
+      "citation": "Haim et al. (2024), 'Machine-learning based high-bandwidth magnetic sensing', arXiv:2409.12820",
+      "nv_type": "4-axis NV ensemble",
+      "original_points": 270,
+      "original_frequency_unit": "MHz",
+      "original_freq_range_mhz": [
+        2730.0,
+        3000.0
+      ],
+      "spectrum_convention": "positive_contrast",
+      "compatible_central_2830_2910": true,
+      "usable_untruncated_on_canonical_2750_2990": true,
+      "out_of_range_or_dips_outside_canonical": false,
+      "dips_outside_canonical_2750_2990": false,
+      "valid_canonical_points": 512,
+      "window_padded": false,
+      "incompatible_reason": null,
+      "ground_truth_b_mt": 4.2887,
+      "ground_truth_angles_deg": [
+        26.2322,
+        73.1431
+      ],
+      "helmholtz_coil_currents_amp": [
+        1.0,
+        2.4,
+        4.5
+      ],
+      "helmholtz_coil_norm_amp": 5.1971,
+      "qa_checks_supported": {
+        "pair_centre_symmetry_about_d0": true,
+        "linearity_vs_coil_current": true,
+        "ground_truth_b_mag_comparison": true
+      },
+      "qa_results": {
+        "n_visible_dips": 8,
+        "visible_dip_freqs_mhz": [
+          2772.16,
+          2792.23,
+          2835.39,
+          2853.46,
+          2901.64,
+          2918.7,
+          2957.84,
+          2972.9
+        ],
+        "selected_pair_dips_mhz": [
+          2772.16,
+          2792.23,
+          2835.39,
+          2853.46,
+          2901.64,
+          2918.7,
+          2957.84,
+          2972.9
+        ],
+        "supports_pair_symmetry": true,
+        "pair_centres_mhz": [
+          2872.528,
+          2875.037,
+          2877.045,
+          2877.546
+        ],
+        "pair_splittings_mhz": [
+          48.178,
+          83.309,
+          165.613,
+          200.743
+        ],
+        "mean_pair_centre_mhz": 2875.539,
+        "pair_centre_std_mhz": 1.976,
+        "estimated_b_mag_mt": 4.2874
+      },
+      "notes": "4-axis NV ensemble, 270 pts [2730, 3000] MHz, Helmholtz coil setting 3 (42.887 G)."
+    },
+    {
+      "trace_id": "trianam_small_field_4",
+      "source_name": "GitHub trianam/machineLearningMagneticSensing",
+      "license": "GPL-3.0",
+      "citation": "Haim et al. (2024), 'Machine-learning based high-bandwidth magnetic sensing', arXiv:2409.12820",
+      "nv_type": "4-axis NV ensemble",
+      "original_points": 300,
+      "original_frequency_unit": "MHz",
+      "original_freq_range_mhz": [
+        2730.0,
+        3030.0
+      ],
+      "spectrum_convention": "positive_contrast",
+      "compatible_central_2830_2910": true,
+      "usable_untruncated_on_canonical_2750_2990": false,
+      "out_of_range_or_dips_outside_canonical": true,
+      "dips_outside_canonical_2750_2990": true,
+      "valid_canonical_points": 512,
+      "window_padded": false,
+      "incompatible_reason": null,
+      "ground_truth_b_mt": 4.4104,
+      "ground_truth_angles_deg": [
+        29.2317,
+        69.4327
+      ],
+      "helmholtz_coil_currents_amp": [
+        1.0,
+        2.8,
+        4.5
+      ],
+      "helmholtz_coil_norm_amp": 5.3935,
+      "qa_checks_supported": {
+        "pair_centre_symmetry_about_d0": true,
+        "linearity_vs_coil_current": true,
+        "ground_truth_b_mag_comparison": true
+      },
+      "qa_results": {
+        "n_visible_dips": 11,
+        "visible_dip_freqs_mhz": [
+          2766.12,
+          2776.15,
+          2793.21,
+          2836.35,
+          2860.43,
+          2895.55,
+          2919.63,
+          2957.76,
+          2978.83,
+          3004.92,
+          3013.95
+        ],
+        "selected_pair_dips_mhz": [
+          2766.12,
+          2793.21,
+          2836.35,
+          2860.43,
+          2895.55,
+          2919.63,
+          2957.76,
+          2978.83
+        ],
+        "supports_pair_symmetry": true,
+        "pair_centres_mhz": [
+          2872.475,
+          2875.485,
+          2877.993,
+          2877.993
+        ],
+        "pair_splittings_mhz": [
+          35.117,
+          83.278,
+          164.548,
+          212.709
+        ],
+        "mean_pair_centre_mhz": 2875.987,
+        "pair_centre_std_mhz": 2.271,
+        "estimated_b_mag_mt": 4.3836
+      },
+      "notes": "4-axis NV ensemble, 300 pts [2730, 3030] MHz, Helmholtz coil setting 4 (44.104 G)."
+    },
+    {
+      "trace_id": "trianam_folder_2_101G",
+      "source_name": "GitHub trianam/machineLearningMagneticSensing",
+      "license": "GPL-3.0",
+      "citation": "Haim et al. (2024), 'Machine-learning based high-bandwidth magnetic sensing', arXiv:2409.12820",
+      "nv_type": "4-axis NV ensemble",
+      "original_points": 651,
+      "original_frequency_unit": "MHz",
+      "original_freq_range_mhz": [
+        2550.0,
+        3200.0
+      ],
+      "spectrum_convention": "negative_contrast",
+      "compatible_central_2830_2910": true,
+      "usable_untruncated_on_canonical_2750_2990": false,
+      "out_of_range_or_dips_outside_canonical": true,
+      "dips_outside_canonical_2750_2990": true,
+      "valid_canonical_points": 512,
+      "window_padded": false,
+      "incompatible_reason": null,
+      "ground_truth_b_mt": 10.187,
+      "ground_truth_angles_deg": [
+        23.124,
+        63.15
+      ],
+      "helmholtz_coil_currents_amp": null,
+      "helmholtz_coil_norm_amp": null,
+      "qa_checks_supported": {
+        "pair_centre_symmetry_about_d0": true,
+        "linearity_vs_coil_current": false,
+        "ground_truth_b_mag_comparison": true
+      },
+      "qa_results": {
+        "n_visible_dips": 61,
+        "visible_dip_freqs_mhz": [
+          2564.0,
+          2570.0,
+          2582.0,
+          2588.0,
+          2593.0,
+          2600.0,
+          2608.0,
+          2619.0,
+          2628.0,
+          2634.0,
+          2639.0,
+          2646.0,
+          2665.0,
+          2669.0,
+          2686.0,
+          2702.0,
+          2716.0,
+          2740.0,
+          2748.0,
+          2754.0,
+          2761.0,
+          2769.0,
+          2785.0,
+          2800.0,
+          2809.0,
+          2823.0,
+          2827.0,
+          2841.0,
+          2847.0,
+          2863.0,
+          2869.0,
+          2877.0,
+          2882.0,
+          2887.0,
+          2892.0,
+          2897.0,
+          2905.0,
+          2921.0,
+          2932.0,
+          2945.0,
+          2950.0,
+          2965.0,
+          2979.0,
+          2997.0,
+          3005.0,
+          3015.0,
+          3030.0,
+          3038.0,
+          3048.0,
+          3075.0,
+          3081.0,
+          3099.0,
+          3109.0,
+          3125.0,
+          3149.0,
+          3154.0,
+          3159.0,
+          3165.0,
+          3173.0,
+          3186.0,
+          3193.0
+        ],
+        "selected_pair_dips_mhz": [
+          2646.0,
+          2716.0,
+          2785.0,
+          2847.0,
+          2979.0,
+          3030.0,
+          3075.0,
+          3125.0
+        ],
+        "supports_pair_symmetry": true,
+        "pair_centres_mhz": [
+          2885.5,
+          2895.5,
+          2907.5,
+          2913.0
+        ],
+        "pair_splittings_mhz": [
+          132.0,
+          245.0,
+          359.0,
+          479.0
+        ],
+        "mean_pair_centre_mhz": 2900.375,
+        "pair_centre_std_mhz": 10.668,
+        "estimated_b_mag_mt": 10.2049
+      },
+      "notes": "4-axis NV ensemble, 651 pts [2550, 3200] MHz, |B|=101.87 G (10.187 mT); outer dips exceed canonical [2750, 2990] MHz window."
+    },
+    {
+      "trace_id": "trianam_folder_3_48G_hf",
+      "source_name": "GitHub trianam/machineLearningMagneticSensing",
+      "license": "GPL-3.0",
+      "citation": "Haim et al. (2024), 'Machine-learning based high-bandwidth magnetic sensing', arXiv:2409.12820",
+      "nv_type": "4-axis NV ensemble",
+      "original_points": 1000,
+      "original_frequency_unit": "MHz",
+      "original_freq_range_mhz": [
+        2710.0,
+        3010.0
+      ],
+      "spectrum_convention": "negative_contrast",
+      "compatible_central_2830_2910": true,
+      "usable_untruncated_on_canonical_2750_2990": false,
+      "out_of_range_or_dips_outside_canonical": true,
+      "dips_outside_canonical_2750_2990": true,
+      "valid_canonical_points": 512,
+      "window_padded": false,
+      "incompatible_reason": null,
+      "ground_truth_b_mt": 4.832,
+      "ground_truth_angles_deg": [
+        29.77,
+        69.1834
+      ],
+      "helmholtz_coil_currents_amp": null,
+      "helmholtz_coil_norm_amp": null,
+      "qa_checks_supported": {
+        "pair_centre_symmetry_about_d0": true,
+        "linearity_vs_coil_current": false,
+        "ground_truth_b_mag_comparison": true
+      },
+      "qa_results": {
+        "n_visible_dips": 20,
+        "visible_dip_freqs_mhz": [
+          2752.04,
+          2754.14,
+          2755.95,
+          2783.27,
+          2784.47,
+          2786.58,
+          2831.92,
+          2833.72,
+          2834.92,
+          2861.35,
+          2894.98,
+          2896.49,
+          2897.69,
+          2920.51,
+          2923.51,
+          2925.32,
+          2965.86,
+          2988.68,
+          2990.18,
+          2991.38
+        ],
+        "selected_pair_dips_mhz": [
+          2754.14,
+          2784.47,
+          2833.72,
+          2861.35,
+          2897.69,
+          2923.51,
+          2965.86,
+          2990.18
+        ],
+        "supports_pair_symmetry": true,
+        "pair_centres_mhz": [
+          2872.162,
+          2875.165,
+          2878.619,
+          2879.52
+        ],
+        "pair_splittings_mhz": [
+          36.336,
+          89.79,
+          181.381,
+          236.036
+        ],
+        "mean_pair_centre_mhz": 2876.366,
+        "pair_centre_std_mhz": 2.921,
+        "estimated_b_mag_mt": 4.8368
+      },
+      "notes": "4-axis NV ensemble with resolved 14N hyperfine triplets, 1000 pts [2710, 3010] MHz, |B|=48.32 G (4.832 mT); outer dip at 2991.4 MHz encroaches canonical upper edge."
+    },
+    {
+      "trace_id": "trianam_folder_4_69G",
+      "source_name": "GitHub trianam/machineLearningMagneticSensing",
+      "license": "GPL-3.0",
+      "citation": "Haim et al. (2024), 'Machine-learning based high-bandwidth magnetic sensing', arXiv:2409.12820",
+      "nv_type": "4-axis NV ensemble",
+      "original_points": 191,
+      "original_frequency_unit": "MHz",
+      "original_freq_range_mhz": [
+        2600.0,
+        3140.0
+      ],
+      "spectrum_convention": "negative_contrast",
+      "compatible_central_2830_2910": true,
+      "usable_untruncated_on_canonical_2750_2990": false,
+      "out_of_range_or_dips_outside_canonical": true,
+      "dips_outside_canonical_2750_2990": true,
+      "valid_canonical_points": 512,
+      "window_padded": false,
+      "incompatible_reason": null,
+      "ground_truth_b_mt": 6.95,
+      "ground_truth_angles_deg": [
+        23.73,
+        66.27
+      ],
+      "helmholtz_coil_currents_amp": null,
+      "helmholtz_coil_norm_amp": null,
+      "qa_checks_supported": {
+        "pair_centre_symmetry_about_d0": true,
+        "linearity_vs_coil_current": false,
+        "ground_truth_b_mag_comparison": true
+      },
+      "qa_results": {
+        "n_visible_dips": 26,
+        "visible_dip_freqs_mhz": [
+          2619.89,
+          2639.79,
+          2659.68,
+          2676.74,
+          2688.11,
+          2713.68,
+          2750.63,
+          2773.37,
+          2804.63,
+          2824.53,
+          2841.58,
+          2858.63,
+          2878.53,
+          2909.79,
+          2921.16,
+          2935.37,
+          2946.74,
+          2966.63,
+          2995.05,
+          3006.42,
+          3037.68,
+          3057.58,
+          3068.95,
+          3088.84,
+          3108.74,
+          3137.16
+        ],
+        "selected_pair_dips_mhz": [
+          2713.68,
+          2750.63,
+          2804.63,
+          2841.58,
+          2935.37,
+          2966.63,
+          3006.42,
+          3037.68
+        ],
+        "supports_pair_symmetry": true,
+        "pair_centres_mhz": [
+          2875.684,
+          2878.526,
+          2885.632,
+          2888.474
+        ],
+        "pair_splittings_mhz": [
+          93.789,
+          162.0,
+          255.789,
+          324.0
+        ],
+        "mean_pair_centre_mhz": 2882.079,
+        "pair_centre_std_mhz": 5.173,
+        "estimated_b_mag_mt": 7.0052
+      },
+      "notes": "4-axis NV ensemble, 191 pts [2600, 3140] MHz, |B|=69.50 G (6.950 mT); outer dips exceed canonical [2750, 2990] MHz window."
+    },
+    {
+      "trace_id": "zenodo14697917_Hole2_05-23-2023_03-01_ODMR_0.1_MHz_-25_dBm_LSPM2021A_NV1",
+      "source_name": "Zenodo record 14697917",
+      "license": "CC-BY-4.0",
+      "citation": "Neu & Nimba (2025), 'Dataset for: Nitrogen-Vacancy Centers in Epitaxial Laterally Overgrown Diamond', Zenodo 14697917, DOI: 10.5281/zenodo.14697917",
+      "nv_type": "single NV center (zero-field strain study)",
+      "original_points": 401,
+      "original_frequency_unit": "GHz",
+      "original_freq_range_mhz": [
+        2850.0,
+        2890.0
+      ],
+      "spectrum_convention": "fluorescence",
+      "compatible_central_2830_2910": false,
+      "usable_untruncated_on_canonical_2750_2990": false,
+      "out_of_range_or_dips_outside_canonical": true,
+      "dips_outside_canonical_2750_2990": false,
+      "valid_canonical_points": 0,
+      "window_padded": false,
+      "incompatible_reason": "Input frequency range does not cover the required central NV resonance region [2830, 2910] MHz.",
+      "ground_truth_b_mt": 0.0,
+      "ground_truth_angles_deg": null,
+      "helmholtz_coil_currents_amp": null,
+      "helmholtz_coil_norm_amp": null,
+      "qa_checks_supported": {
+        "pair_centre_symmetry_about_d0": false,
+        "linearity_vs_coil_current": false,
+        "ground_truth_b_mag_comparison": false
+      },
+      "qa_results": {
+        "n_visible_dips": 54,
+        "visible_dip_freqs_mhz": [
+          2850.4,
+          2851.0,
+          2851.9,
+          2852.5,
+          2852.9,
+          2853.5,
+          2854.3,
+          2854.8,
+          2855.5,
+          2856.0,
+          2856.5,
+          2857.8,
+          2858.7,
+          2859.5,
+          2859.9,
+          2860.3,
+          2860.8,
+          2861.3,
+          2862.2,
+          2862.6,
+          2863.0,
+          2863.6,
+          2864.7,
+          2865.2,
+          2865.6,
+          2867.0,
+          2867.5,
+          2868.8,
+          2869.3,
+          2869.8,
+          2870.3,
+          2872.2,
+          2873.6,
+          2874.2,
+          2875.0,
+          2876.0,
+          2876.5,
+          2877.2,
+          2877.8,
+          2878.3,
+          2878.9,
+          2879.6,
+          2880.2,
+          2882.3,
+          2882.8,
+          2883.7,
+          2884.4,
+          2885.0,
+          2885.4,
+          2886.0,
+          2886.6,
+          2887.0,
+          2888.5,
+          2889.0
+        ],
+        "selected_pair_dips_mhz": [
+          2869.8,
+          2874.2
+        ],
+        "supports_pair_symmetry": true,
+        "pair_centres_mhz": [
+          2872.0
+        ],
+        "pair_splittings_mhz": [
+          4.4
+        ],
+        "mean_pair_centre_mhz": 2872.0,
+        "pair_centre_std_mhz": 0.0,
+        "estimated_b_mag_mt": 0.0785
+      },
+      "notes": "Single-NV zero-field strain scan in GHz ([2850.0, 2890.0] MHz); flagged incompatible because window is narrower than required [2830.0, 2910.0] MHz."
+    },
+    {
+      "trace_id": "zenodo14697917_Hole3_05-06-2023_10-01_ODMR_0.1_MHz_-25_dBm_LSPM2021A_NV1",
+      "source_name": "Zenodo record 14697917",
+      "license": "CC-BY-4.0",
+      "citation": "Neu & Nimba (2025), 'Dataset for: Nitrogen-Vacancy Centers in Epitaxial Laterally Overgrown Diamond', Zenodo 14697917, DOI: 10.5281/zenodo.14697917",
+      "nv_type": "single NV center (zero-field strain study)",
+      "original_points": 251,
+      "original_frequency_unit": "GHz",
+      "original_freq_range_mhz": [
+        2855.0,
+        2880.0
+      ],
+      "spectrum_convention": "fluorescence",
+      "compatible_central_2830_2910": false,
+      "usable_untruncated_on_canonical_2750_2990": false,
+      "out_of_range_or_dips_outside_canonical": true,
+      "dips_outside_canonical_2750_2990": false,
+      "valid_canonical_points": 0,
+      "window_padded": false,
+      "incompatible_reason": "Input frequency range does not cover the required central NV resonance region [2830, 2910] MHz.",
+      "ground_truth_b_mt": 0.0,
+      "ground_truth_angles_deg": null,
+      "helmholtz_coil_currents_amp": null,
+      "helmholtz_coil_norm_amp": null,
+      "qa_checks_supported": {
+        "pair_centre_symmetry_about_d0": false,
+        "linearity_vs_coil_current": false,
+        "ground_truth_b_mag_comparison": false
+      },
+      "qa_results": {
+        "n_visible_dips": 7,
+        "visible_dip_freqs_mhz": [
+          2856.3,
+          2857.4,
+          2860.4,
+          2864.4,
+          2870.7,
+          2875.8,
+          2877.8
+        ],
+        "selected_pair_dips_mhz": [
+          2864.4,
+          2870.7
+        ],
+        "supports_pair_symmetry": true,
+        "pair_centres_mhz": [
+          2867.55
+        ],
+        "pair_splittings_mhz": [
+          6.3
+        ],
+        "mean_pair_centre_mhz": 2867.55,
+        "pair_centre_std_mhz": 0.0,
+        "estimated_b_mag_mt": 0.1124
+      },
+      "notes": "Single-NV zero-field strain scan in GHz ([2855.0, 2880.0] MHz); flagged incompatible because window is narrower than required [2830.0, 2910.0] MHz."
+    },
+    {
+      "trace_id": "zenodo14697917_Hole3_05-09-2023_20-03_ODMR_0.1_MHz_-20_dBm_LSPM2021A_NV10",
+      "source_name": "Zenodo record 14697917",
+      "license": "CC-BY-4.0",
+      "citation": "Neu & Nimba (2025), 'Dataset for: Nitrogen-Vacancy Centers in Epitaxial Laterally Overgrown Diamond', Zenodo 14697917, DOI: 10.5281/zenodo.14697917",
+      "nv_type": "single NV center (zero-field strain study)",
+      "original_points": 501,
+      "original_frequency_unit": "GHz",
+      "original_freq_range_mhz": [
+        2840.0,
+        2890.0
+      ],
+      "spectrum_convention": "fluorescence",
+      "compatible_central_2830_2910": false,
+      "usable_untruncated_on_canonical_2750_2990": false,
+      "out_of_range_or_dips_outside_canonical": true,
+      "dips_outside_canonical_2750_2990": false,
+      "valid_canonical_points": 0,
+      "window_padded": false,
+      "incompatible_reason": "Input frequency range does not cover the required central NV resonance region [2830, 2910] MHz.",
+      "ground_truth_b_mt": 0.0,
+      "ground_truth_angles_deg": null,
+      "helmholtz_coil_currents_amp": null,
+      "helmholtz_coil_norm_amp": null,
+      "qa_checks_supported": {
+        "pair_centre_symmetry_about_d0": false,
+        "linearity_vs_coil_current": false,
+        "ground_truth_b_mag_comparison": false
+      },
+      "qa_results": {
+        "n_visible_dips": 61,
+        "visible_dip_freqs_mhz": [
+          2840.7,
+          2841.6,
+          2842.4,
+          2843.3,
+          2843.8,
+          2844.6,
+          2845.2,
+          2845.9,
+          2847.2,
+          2848.3,
+          2849.2,
+          2849.8,
+          2850.2,
+          2850.6,
+          2851.1,
+          2851.6,
+          2852.6,
+          2853.2,
+          2853.7,
+          2854.6,
+          2855.2,
+          2855.6,
+          2856.1,
+          2856.5,
+          2857.0,
+          2857.4,
+          2857.8,
+          2859.4,
+          2859.8,
+          2860.5,
+          2861.9,
+          2862.7,
+          2863.1,
+          2863.8,
+          2864.4,
+          2865.0,
+          2865.7,
+          2866.9,
+          2868.2,
+          2868.9,
+          2869.5,
+          2870.9,
+          2872.9,
+          2875.7,
+          2877.6,
+          2878.8,
+          2879.2,
+          2880.6,
+          2881.3,
+          2881.9,
+          2882.9,
+          2883.5,
+          2884.0,
+          2884.6,
+          2885.4,
+          2886.3,
+          2886.8,
+          2887.4,
+          2887.8,
+          2888.6,
+          2889.5
+        ],
+        "selected_pair_dips_mhz": [
+          2869.5,
+          2872.9
+        ],
+        "supports_pair_symmetry": true,
+        "pair_centres_mhz": [
+          2871.2
+        ],
+        "pair_splittings_mhz": [
+          3.4
+        ],
+        "mean_pair_centre_mhz": 2871.2,
+        "pair_centre_std_mhz": 0.0,
+        "estimated_b_mag_mt": 0.0607
+      },
+      "notes": "Single-NV zero-field strain scan in GHz ([2840.0, 2890.0] MHz); flagged incompatible because window is narrower than required [2830.0, 2910.0] MHz."
+    }
+  ]
+}

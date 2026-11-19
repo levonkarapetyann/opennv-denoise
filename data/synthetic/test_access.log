@@ -1,0 +1,12 @@
+{"timestamp_utc": "2026-11-19T13:51:46.819023+00:00", "split": "test_id", "file": "test_id.npz", "event": "write_once", "caller": "save_split_npz"}
+{"timestamp_utc": "2026-11-19T13:51:46.890039+00:00", "split": "test_id", "file": "test_id.npz", "event": "hash_check", "caller": "compute_file_sha256"}
+{"timestamp_utc": "2026-11-19T13:51:51.038575+00:00", "split": "test_ood", "file": "test_ood.npz", "event": "write_once", "caller": "save_split_npz"}
+{"timestamp_utc": "2026-11-19T13:51:51.122762+00:00", "split": "test_ood", "file": "test_ood.npz", "event": "hash_check", "caller": "compute_file_sha256"}
+{"timestamp_utc": "2026-11-19T13:59:19.653759+00:00", "split": "test_id", "file": "test_id.npz", "event": "hash_check", "caller": "compute_file_sha256"}
+{"timestamp_utc": "2026-11-19T13:59:19.739909+00:00", "split": "test_ood", "file": "test_ood.npz", "event": "hash_check", "caller": "compute_file_sha256"}
+{"timestamp_utc": "2026-11-19T14:01:21.606916+00:00", "split": "test_id", "file": "test_id.npz", "event": "hash_check", "caller": "compute_file_sha256"}
+{"timestamp_utc": "2026-11-19T14:01:21.672052+00:00", "split": "test_ood", "file": "test_ood.npz", "event": "hash_check", "caller": "compute_file_sha256"}
+{"timestamp_utc": "2026-11-19T14:02:08.753303+00:00", "split": "test_id", "file": "test_id.npz", "event": "hash_check", "caller": "compute_file_sha256"}
+{"timestamp_utc": "2026-11-19T14:02:08.817606+00:00", "split": "test_ood", "file": "test_ood.npz", "event": "hash_check", "caller": "compute_file_sha256"}
+{"timestamp_utc": "2026-11-19T14:03:05.012257+00:00", "split": "test_id", "file": "test_id.npz", "event": "hash_check", "caller": "compute_file_sha256"}
+{"timestamp_utc": "2026-11-19T14:03:05.076046+00:00", "split": "test_ood", "file": "test_ood.npz", "event": "hash_check", "caller": "compute_file_sha256"}
