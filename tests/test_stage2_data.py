@@ -30,6 +30,7 @@ from src.dataset_gen import (
     TEST_ACCESS_LOG_PATH,
     NumpyODMRDataset,
     OnTheFlyODMRIterableDataset,
+    SplitConfig,
     compute_file_sha256,
     derive_sample_seed,
     generate_single_sample,
@@ -37,6 +38,7 @@ from src.dataset_gen import (
     get_test_access_counts,
     load_synthetic_split,
     regenerate_sample_components,
+    select_12_unique_example_indices,
     target_regime_for_index,
 )
 from src.noise import (
@@ -168,6 +170,7 @@ def test_seed_disjointness_and_no_identical_parameters_across_splits() -> None:
     inspectable_splits = [
         "train_snapshot",
         "val_id",
+        "val_id_natural",
         "val_ood",
         "ood_hwhm",
         "ood_contrast",
@@ -176,6 +179,7 @@ def test_seed_disjointness_and_no_identical_parameters_across_splits() -> None:
         "ood_drift",
         "ood_hum",
         "ood_grid",
+        "ood_high_field",
     ]
 
     all_sample_seeds: set[int] = set()
@@ -626,3 +630,112 @@ def test_real_data_importer_unit_normalization_and_narrow_window_rejection() -> 
         assert np.allclose(rec_csv["resampled_spectrum"], rec_npz["resampled_spectrum"], atol=1e-5)
 
     assert DEFAULT_REAL_MANIFEST_PATH.exists()
+
+
+def test_stage21_val_id_natural_and_ood_high_field_splits() -> None:
+    """Stage 2.1 Task 2 & Task 3.1: Verify val_id_natural and ood_high_field properties and dip bounds."""
+    from src.config import NV_AXES
+    from src.physics import solve_axis_transitions
+
+    d_nat = load_synthetic_split("val_id_natural")
+    assert d_nat["X_noisy"].shape == (1500, N_POINTS)
+    reg_nat = d_nat["aux_regime_id"]
+    frac_hard = float(np.mean(reg_nat == REGIME_HARD))
+    frac_med = float(np.mean(reg_nat == REGIME_MEDIUM))
+    frac_easy = float(np.mean(reg_nat == REGIME_EASY))
+    assert 0.24 <= frac_hard <= 0.33, f"Unexpected natural hard fraction: {frac_hard}"
+    assert 0.16 <= frac_med <= 0.24, f"Unexpected natural medium fraction: {frac_med}"
+    assert 0.46 <= frac_easy <= 0.56, f"Unexpected natural easy fraction: {frac_easy}"
+    assert float(np.min(d_nat["Y_b_mag"])) >= B_MAG_MIN_MT
+    assert float(np.max(d_nat["Y_b_mag"])) <= B_MAG_MAX_MT
+
+    d_hf = load_synthetic_split("ood_high_field")
+    assert d_hf["X_noisy"].shape == (1000, N_POINTS)
+    assert float(np.min(d_hf["Y_b_mag"])) >= 3.25 - 1e-4
+    assert float(np.max(d_hf["Y_b_mag"])) <= 4.60 + 1e-4
+
+    # Verify all 8 dip centers for every sample in ood_high_field fall strictly within [2760, 2980] MHz
+    b_vecs = d_hf["aux_b_vec_canon"].astype(np.float64)
+    d0_arr = (D0_MHZ + d_hf["Y_d0"].astype(np.float64))[:, None]
+    b_par = np.abs(b_vecs @ NV_AXES.T)
+    b_mag_sq = np.sum(b_vecs * b_vecs, axis=1, keepdims=True)
+    b_perp = np.sqrt(np.maximum(0.0, b_mag_sq - b_par * b_par))
+    fm, fp, _ = solve_axis_transitions(b_par, b_perp, d0_arr)
+    assert float(np.min(fm)) >= 2760.0 - 1e-3, f"Min dip {float(np.min(fm))} < 2760 MHz"
+    assert float(np.max(fp)) <= 2980.0 + 1e-3, f"Max dip {float(np.max(fp))} > 2980 MHz"
+
+
+def test_stage21_per_axis_contrast_jitter_and_stage2v1_hash_preservation() -> None:
+    """Stage 2.1 Task 2.2: Verify per_axis_contrast_jitter behavior and bit-identical v1 hashes when disabled."""
+    with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    # All 12 Stage 2 v1 split hashes must remain bit-identical
+    expected_v1_hashes = {
+        "train_snapshot": "37761c3d40349ae3c0336f208074be2fc33035b1420642f2a2b38b28af4791e8",
+        "val_id": "294efabc236b362340078d789282654085915e3bb68648f6165573c4f41a48cc",
+        "val_ood": "014df8d74cab853b09771a114750db2fce5afd194c48e96d3d4098d3e4026dfa",
+        "ood_hwhm": "643cb17ffd93f0d41fe45fac48dfc88a3e404822846f611a075ef910a4838b19",
+        "ood_contrast": "9396e1f3efc8b3ee7fb264c0564f4cf0c7ebbd127389b787f226a52f8b4e30a6",
+        "ood_d0": "501e98151a698d6e97cf012828d65e99328ce2b46975a1a6f108367304b2645a",
+        "ood_noise": "9c6bbd457165dca0aa73d7c5a190461047d2b62a850ecd3484f59a2c24735c8b",
+        "ood_drift": "c75b7c630e7ffe975c23f397708ea4c56af1408af6017c50eaf4d55f058181c4",
+        "ood_hum": "9b57ed282f1a5320da09dd0373d145a118e7660a3f76f72b7479e5b7be67c340",
+        "ood_grid": "f7998fbb6d7da6fdba218b0fb0b03838d3fca4371a68fac4648bc08fd6dad0c7",
+        "test_id": "819e007a1a3fbc45d52df4334fd0ce6906f7e59e31cd22204b023383d63cbf79",
+        "test_ood": "fcdce8033fb0d04cfd5cb7c5ea92b1b9ee7fbfd457556bba00c8a3e02ce627e7",
+    }
+    for sname, exp_sha in expected_v1_hashes.items():
+        assert manifest["splits"][sname]["sha256"] == exp_sha, f"Hash changed for {sname}!"
+
+    # Test per_axis_contrast_jitter > 0 produces normalized non-uniform axis weights without affecting Y_splittings
+    cfg_no_jit = SplitConfig(
+        name="tmp_no_jit",
+        split_seed=20269991,
+        n_samples=10,
+        stratified_regimes=False,
+        factor_ablation_id=0,
+        per_axis_contrast_jitter=0.0,
+    )
+    cfg_jit = SplitConfig(
+        name="tmp_jit",
+        split_seed=20269991,
+        n_samples=10,
+        stratified_regimes=False,
+        factor_ablation_id=0,
+        per_axis_contrast_jitter=0.15,
+    )
+    s0 = generate_single_sample(0, cfg_no_jit)
+    s1 = generate_single_sample(0, cfg_jit)
+    assert "aux_axis_weights" not in s0
+    assert np.isclose(float(np.mean(s1["aux_axis_weights"])), 1.0, atol=1e-6)
+    assert float(np.std(s1["aux_axis_weights"])) > 0.02
+    assert float(np.max(s1["aux_axis_weights"]) / np.min(s1["aux_axis_weights"])) > 1.05
+    assert np.array_equal(s0["Y_splittings"], s1["Y_splittings"])
+    assert s0["Y_b_mag"] == s1["Y_b_mag"]
+    assert not np.allclose(s0["Y_clean"], s1["Y_clean"])
+
+
+def test_stage21_unique_12_example_selection_and_artifacts() -> None:
+    """Stage 2.1 Task 1, Task 3.2 & Task 4: Verify 12 unique example indices and generated Stage 2.1 artifacts."""
+    for sname in ("val_id", "val_ood"):
+        d = load_synthetic_split(sname)
+        selected = select_12_unique_example_indices(d)
+        indices = [idx for idx, _ in selected]
+        assert len(indices) == 12
+        assert len(set(indices)) == 12, f"Duplicate indices in {sname}: {indices}"
+
+    assert (ROOT_DIR / "docs" / "trianam_sim_comparison.md").exists()
+    assert (ROOT_DIR / "assets" / "stage2_trianam_vs_sim.png").exists()
+    assert (ROOT_DIR / "assets" / "stage2_worst_cases.png").exists()
+
+    val_ref_path = DEFAULT_SYNTHETIC_DIR / "val_baseline_ref.npz"
+    assert val_ref_path.exists()
+    with np.load(val_ref_path, allow_pickle=False) as ref:
+        assert ref["val_id_abs_err_ut"].shape == (3000,)
+        assert ref["val_id_natural_abs_err_ut"].shape == (1500,)
+        assert ref["val_ood_abs_err_ut"].shape == (1500,)
+        assert ref["ood_high_field_abs_err_ut"].shape == (100,)
+        assert float(np.mean(ref["ood_high_field_wrong_basin"])) >= 0.90
+        assert float(np.mean(ref["ood_high_field_out_of_range"])) >= 0.30
+

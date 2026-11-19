@@ -69,6 +69,7 @@ FACTOR_OOD_DRIFT: int = 5
 FACTOR_OOD_HUM: int = 6
 FACTOR_OOD_GRID: int = 7
 FACTOR_OOD_COMBINED: int = 8
+FACTOR_OOD_HIGH_FIELD: int = 9
 
 FACTOR_ABLATION_NAMES: Dict[int, str] = {
     FACTOR_ID_STANDARD: "id_standard",
@@ -80,6 +81,7 @@ FACTOR_ABLATION_NAMES: Dict[int, str] = {
     FACTOR_OOD_HUM: "ood_hum",
     FACTOR_OOD_GRID: "ood_grid",
     FACTOR_OOD_COMBINED: "ood_combined",
+    FACTOR_OOD_HIGH_FIELD: "ood_high_field",
 }
 
 LOCKED_TEST_SPLITS: Tuple[str, ...] = ("test_id", "test_ood")
@@ -87,7 +89,7 @@ LOCKED_TEST_SPLITS: Tuple[str, ...] = ("test_id", "test_ood")
 
 @dataclass(frozen=True)
 class SplitConfig:
-    """Complete deterministic specification for a Stage 2 dataset split."""
+    """Complete deterministic specification for a Stage 2 / 2.1 dataset split."""
 
     name: str
     split_seed: int
@@ -103,6 +105,10 @@ class SplitConfig:
     ood_grid_aggressive: bool = False
     grid_perturb_prob: float = 0.30
     is_locked_test: bool = False
+    allow_high_field_in_window: bool = False
+    b_mag_range_mt: Tuple[float, float] = (B_MAG_MIN_MT, B_MAG_MAX_MT)
+    in_window_freq_bounds_mhz: Tuple[float, float] = (2760.0, 2980.0)
+    per_axis_contrast_jitter: float = 0.0
 
 
 SPLIT_REGISTRY: Dict[str, SplitConfig] = {
@@ -127,6 +133,14 @@ SPLIT_REGISTRY: Dict[str, SplitConfig] = {
         split_seed=20260201,
         n_samples=4000,
         stratified_regimes=True,
+        factor_ablation_id=FACTOR_ID_STANDARD,
+        grid_perturb_prob=0.30,
+    ),
+    "val_id_natural": SplitConfig(
+        name="val_id_natural",
+        split_seed=20260203,
+        n_samples=1500,
+        stratified_regimes=False,
         factor_ablation_id=FACTOR_ID_STANDARD,
         grid_perturb_prob=0.30,
     ),
@@ -207,6 +221,17 @@ SPLIT_REGISTRY: Dict[str, SplitConfig] = {
         factor_ablation_id=FACTOR_OOD_GRID,
         ood_grid_aggressive=True,
         grid_perturb_prob=1.00,
+    ),
+    "ood_high_field": SplitConfig(
+        name="ood_high_field",
+        split_seed=20260308,
+        n_samples=1000,
+        stratified_regimes=False,
+        factor_ablation_id=FACTOR_OOD_HIGH_FIELD,
+        grid_perturb_prob=0.30,
+        allow_high_field_in_window=True,
+        b_mag_range_mt=(3.25, 4.60),
+        in_window_freq_bounds_mhz=(2760.0, 2980.0),
     ),
     "test_id": SplitConfig(
         name="test_id",
@@ -369,25 +394,84 @@ def generate_single_sample(
         d0_offset_mhz = float(np.clip(np.float32(rng.uniform(-3.0, 3.0)), -3.0, 3.0))
     d0_mhz = D0_MHZ + d0_offset_mhz
 
-    # |B| in [0.05, 3.20] mT (50% log-uniform, 50% uniform)
-    if float(rng.random()) < 0.5:
-        b_mag_draw = float(np.exp(rng.uniform(np.log(B_MAG_MIN_MT), np.log(B_MAG_MAX_MT))))
-    else:
-        b_mag_draw = float(rng.uniform(B_MAG_MIN_MT, B_MAG_MAX_MT))
-    b_mag_draw = float(np.clip(b_mag_draw, B_MAG_MIN_MT + 1e-5, B_MAG_MAX_MT - 1e-5))
-
-    u_hat, sampler_near_deg, min_abs_cos = _sample_direction_s2(rng)
-    b_vec = (b_mag_draw * u_hat).astype(np.float32).astype(np.float64)
-    b_mag = float(np.linalg.norm(b_vec))
     e_mhz = 0.0
-    b_vec_canon = canonicalize_b_vec(b_vec, e_mhz=e_mhz)
+    axis_weights: Optional[np.ndarray] = None
+    if split_cfg.per_axis_contrast_jitter > 0.0:
+        rng_axis = np.random.default_rng(int(sample_seed) ^ 0xA5157E1687501234)
+        raw_w = np.exp(rng_axis.normal(0.0, float(split_cfg.per_axis_contrast_jitter), size=4))
+        axis_weights = (raw_w / np.mean(raw_w)).astype(np.float32).astype(np.float64)
 
-    # 2. Simulate clean canonical spectrum & compute depth_outer / flags in one pass
-    y_clean_f64, splittings_sorted, b_par, _, fm_arr, fp_arr, cf_arr, axis_depths = (
-        fast_simulate_single_clean_odmr(
-            CANONICAL_FREQS, b_vec_canon, d0_mhz, hwhm_mhz, contrast, eta, e_mhz=e_mhz
+    if not split_cfg.allow_high_field_in_window:
+        # |B| in [0.05, 3.20] mT (50% log-uniform, 50% uniform) — exact Stage 2 v1 RNG sequence
+        if float(rng.random()) < 0.5:
+            b_mag_draw = float(np.exp(rng.uniform(np.log(B_MAG_MIN_MT), np.log(B_MAG_MAX_MT))))
+        else:
+            b_mag_draw = float(rng.uniform(B_MAG_MIN_MT, B_MAG_MAX_MT))
+        b_mag_draw = float(np.clip(b_mag_draw, B_MAG_MIN_MT + 1e-5, B_MAG_MAX_MT - 1e-5))
+
+        u_hat, sampler_near_deg, min_abs_cos = _sample_direction_s2(rng)
+        b_vec = (b_mag_draw * u_hat).astype(np.float32).astype(np.float64)
+        b_mag = float(np.linalg.norm(b_vec))
+        b_vec_canon = canonicalize_b_vec(b_vec, e_mhz=e_mhz)
+
+        # 2. Simulate clean canonical spectrum & compute depth_outer / flags in one pass
+        y_clean_f64, splittings_sorted, b_par, _, fm_arr, fp_arr, cf_arr, axis_depths = (
+            fast_simulate_single_clean_odmr(
+                CANONICAL_FREQS,
+                b_vec_canon,
+                d0_mhz,
+                hwhm_mhz,
+                contrast,
+                eta,
+                e_mhz=e_mhz,
+                axis_weights=axis_weights,
+            )
         )
-    )
+    else:
+        # Stage 2.1 orientation-filtered high-field mode: |B| in b_mag_range_mt (up to 4.60 mT)
+        # with all 4 axis transition pairs strictly inside in_window_freq_bounds_mhz ([2760, 2980] MHz)
+        b_lo, b_hi = float(split_cfg.b_mag_range_mt[0]), float(split_cfg.b_mag_range_mt[1])
+        f_win_lo, f_win_hi = (
+            float(split_cfg.in_window_freq_bounds_mhz[0]),
+            float(split_cfg.in_window_freq_bounds_mhz[1]),
+        )
+        if b_lo < 0.20 and float(rng.random()) < 0.5:
+            b_mag_draw = float(np.exp(rng.uniform(np.log(b_lo), np.log(b_hi))))
+        else:
+            b_mag_draw = float(rng.uniform(b_lo, b_hi))
+        b_mag_draw = float(np.clip(b_mag_draw, b_lo + 1e-4, b_hi - 1e-4))
+
+        for attempt in range(256):
+            if attempt < 250:
+                u_hat, sampler_near_deg, min_abs_cos = _sample_direction_s2(rng)
+            else:
+                # Near-<100> direction where max_k |B_par,k| ~= |B|/sqrt(3) <= 2.66 mT (< 75 MHz half-splitting)
+                raw_100 = np.array([1.0, float(rng.uniform(-0.18, 0.18)), float(rng.uniform(-0.18, 0.18))])
+                u_hat = raw_100 / np.linalg.norm(raw_100)
+                sampler_near_deg = False
+                min_abs_cos = float(np.min(np.abs(NV_AXES @ u_hat)))
+
+            b_vec = (b_mag_draw * u_hat).astype(np.float32).astype(np.float64)
+            b_mag = float(np.linalg.norm(b_vec))
+            if not (b_lo <= b_mag <= b_hi):
+                b_vec = ((b_mag_draw / max(b_mag, 1e-9)) * b_vec).astype(np.float32).astype(np.float64)
+                b_mag = float(np.linalg.norm(b_vec))
+            b_vec_canon = canonicalize_b_vec(b_vec, e_mhz=e_mhz)
+
+            y_clean_f64, splittings_sorted, b_par, _, fm_arr, fp_arr, cf_arr, axis_depths = (
+                fast_simulate_single_clean_odmr(
+                    CANONICAL_FREQS,
+                    b_vec_canon,
+                    d0_mhz,
+                    hwhm_mhz,
+                    contrast,
+                    eta,
+                    e_mhz=e_mhz,
+                    axis_weights=axis_weights,
+                )
+            )
+            if float(np.min(fm_arr)) >= f_win_lo and float(np.max(fp_arr)) <= f_win_hi:
+                break
     depth_info = compute_depth_outer_and_flags(
         b_vec,
         d0_mhz,
@@ -441,7 +525,14 @@ def generate_single_sample(
         clean_sim = y_clean_f64
     else:
         clean_sim, _ = evaluate_transitions_on_grid(
-            freqs_sim, fm_arr, fp_arr, cf_arr, hwhm_mhz, contrast, eta
+            freqs_sim,
+            fm_arr,
+            fp_arr,
+            cf_arr,
+            hwhm_mhz,
+            contrast,
+            eta,
+            axis_weights=axis_weights,
         )
 
     # 6. Drift, Hum, Stochastic, and Gain components on freqs_sim
@@ -585,6 +676,8 @@ def generate_single_sample(
         "aux_e_mhz": np.float32(e_mhz),
         "aux_factor_ablation_id": np.int8(split_cfg.factor_ablation_id),
     }
+    if axis_weights is not None:
+        sample_dict["aux_axis_weights"] = axis_weights.astype(np.float32)
 
     if return_f64_components:
         sample_dict["f64_components"] = {
@@ -859,8 +952,9 @@ def validate_split_arrays_in_memory(
     noise_types = arrays["aux_noise_type"]
     hum_rel = arrays["aux_hum_rel_harmonics"]
 
-    assert float(np.min(b_mag)) >= B_MAG_MIN_MT - 1e-5
-    assert float(np.max(b_mag)) <= B_MAG_MAX_MT + 1e-5
+    b_lo_chk, b_hi_chk = float(split_cfg.b_mag_range_mt[0]), float(split_cfg.b_mag_range_mt[1])
+    assert float(np.min(b_mag)) >= b_lo_chk - 1e-4
+    assert float(np.max(b_mag)) <= b_hi_chk + 1e-4
     assert float(np.min(eta)) >= 0.0 and float(np.max(eta)) <= 1.0
 
     if split_cfg.ood_hwhm:
@@ -979,8 +1073,18 @@ def validate_split_arrays_in_memory(
 
     assert max_f64_id_err < 1e-12, f"float64 component identity error {max_f64_id_err} >= 1e-12"
     assert max_f32_id_err < 1e-6, f"float32 component identity error {max_f32_id_err} >= 1e-6"
-    assert max_clean_sim_err < 1e-10, f"Y_clean vs simulate_batch_clean_odmr error {max_clean_sim_err} >= 1e-10"
+    if split_cfg.per_axis_contrast_jitter <= 0.0:
+        assert max_clean_sim_err < 1e-10, f"Y_clean vs simulate_batch_clean_odmr error {max_clean_sim_err} >= 1e-10"
     assert max_splittings_eigh_err < 1e-5, f"Y_splittings f32 vs eigh error {max_splittings_eigh_err} >= 1e-5"
+
+    if split_cfg.allow_high_field_in_window:
+        f_win_lo, f_win_hi = (
+            float(split_cfg.in_window_freq_bounds_mhz[0]),
+            float(split_cfg.in_window_freq_bounds_mhz[1]),
+        )
+        dip_pairs = batch_sim["dip_pairs"]
+        assert float(np.min(dip_pairs[..., 0])) >= f_win_lo - 1e-3
+        assert float(np.max(dip_pairs[..., 1])) <= f_win_hi + 1e-3
 
     return {
         "split": split_cfg.name,
@@ -1161,6 +1265,61 @@ def run_dry_run_twin_and_generate_all_splits(
     }
 
 
+def generate_stage21_splits_and_update_manifest(
+    output_dir: Path = DEFAULT_SYNTHETIC_DIR,
+    n_workers: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Generate Stage 2.1 additive splits (``val_id_natural`` and ``ood_high_field``) without modifying existing splits."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    log_path = output_dir / "test_access.log"
+    manifest_file = output_dir / "manifest.json"
+    with open(manifest_file, "r", encoding="utf-8") as f:
+        manifest_payload = json.load(f)
+
+    workers = n_workers if n_workers is not None else max(1, min(os.cpu_count() or 4, 8))
+    new_splits = ["val_id_natural", "ood_high_field"]
+    val_summaries: Dict[str, Any] = {}
+
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        for sname in new_splits:
+            cfg = SPLIT_REGISTRY[sname]
+            t0 = time.perf_counter()
+            arrays = generate_split_arrays(cfg, n_workers=workers, executor=pool)
+            gen_sec = time.perf_counter() - t0
+            val_sum = validate_split_arrays_in_memory(arrays, cfg, n_regen_check=500)
+            val_summaries[sname] = val_sum
+
+            fpath = output_dir / f"{sname}.npz"
+            sha256_hex = save_split_npz(
+                arrays, fpath, split_name=sname, is_locked_test=False, log_path=log_path
+            )
+            manifest_payload["splits"][sname] = {
+                "file": fpath.name,
+                "split_seed": cfg.split_seed,
+                "n_samples": cfg.n_samples,
+                "stratified_regimes": cfg.stratified_regimes,
+                "factor_ablation_id": cfg.factor_ablation_id,
+                "factor_ablation_name": FACTOR_ABLATION_NAMES[cfg.factor_ablation_id],
+                "b_mag_range_mt": list(cfg.b_mag_range_mt),
+                "allow_high_field_in_window": cfg.allow_high_field_in_window,
+                "sha256": sha256_hex,
+                "generation_time_sec": round(gen_sec, 3),
+                "throughput_spectra_per_sec": round(cfg.n_samples / max(gen_sec, 1e-6), 1),
+            }
+
+    manifest_payload["stage"] = "Stage 2.1 (stage2-data-v2)"
+    manifest_payload["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+    manifest_payload["test_access_counts"] = get_test_access_counts(log_path)
+
+    with open(manifest_file, "w", encoding="utf-8") as f:
+        json.dump(manifest_payload, f, indent=2)
+
+    return {
+        "manifest": manifest_payload,
+        "validation_summaries": val_summaries,
+    }
+
+
 def measure_generator_throughput(
     n_samples: int = 2000,
     n_workers: Optional[int] = None,
@@ -1334,3 +1493,60 @@ class OnTheFlyODMRIterableDataset:
                 }
             else:
                 yield collated
+
+
+def select_12_unique_example_indices(arrays: Dict[str, np.ndarray]) -> List[Tuple[int, str]]:
+    """Select 12 strictly unique representative spectrum indices across Easy/Medium/Hard regimes.
+
+    For each regime (Easy, Medium, Hard), selects 4 distinct panels:
+    1. 4-Axis Resolved (non-weak, non-degenerate, non-cropped)
+    2. Axis-Degenerate (any |B_par,k| < 0.15 mT, non-weak)
+    3. Weak Splitting (2*gamma_e*max|B_par,k| < 2*HWHM)
+    4. Grid-Cropped (grid_variant_id == 2)
+
+    Guarantees ``len(set(idx for idx, _ in selected)) == 12``.
+    """
+    reg = arrays["aux_regime_id"]
+    weak = arrays["aux_weak_splitting"]
+    deg_any = np.any(arrays["aux_axis_degenerate"], axis=1)
+    cropped = arrays["aux_grid_variant_id"] == 2
+
+    selected: List[Tuple[int, str]] = []
+    used: set[int] = set()
+
+    def _pick_first_unused(cands: np.ndarray, fallback: np.ndarray) -> int:
+        for c in cands:
+            ci = int(c)
+            if ci not in used:
+                used.add(ci)
+                return ci
+        for c in fallback:
+            ci = int(c)
+            if ci not in used:
+                used.add(ci)
+                return ci
+        raise RuntimeError("Could not find an unused spectrum index.")
+
+    for r_id, r_name in ((REGIME_EASY, "Easy"), (REGIME_MEDIUM, "Medium"), (REGIME_HARD, "Hard")):
+        r_mask = reg == r_id
+        r_all = np.flatnonzero(r_mask)
+        idx1 = np.flatnonzero(r_mask & (~weak) & (~deg_any) & (~cropped))
+        idx2 = np.flatnonzero(r_mask & deg_any & (~weak) & (~cropped))
+        if idx2.size == 0:
+            idx2 = np.flatnonzero(r_mask & deg_any & (~weak))
+        idx3 = np.flatnonzero(r_mask & weak & (~cropped))
+        if idx3.size == 0:
+            idx3 = np.flatnonzero(r_mask & weak)
+        idx4 = np.flatnonzero(r_mask & cropped)
+
+        cands = [
+            (_pick_first_unused(idx1, r_all), f"{r_name} (4-Axis Resolved)"),
+            (_pick_first_unused(idx2, r_all), f"{r_name} (Axis-Degenerate)"),
+            (_pick_first_unused(idx3, r_all), f"{r_name} (Weak Splitting)"),
+            (_pick_first_unused(idx4, r_all), f"{r_name} (Grid-Cropped)"),
+        ]
+        selected.extend(cands)
+
+    assert len(set(idx for idx, _ in selected)) == 12
+    return selected
+

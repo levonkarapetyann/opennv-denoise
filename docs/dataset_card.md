@@ -102,6 +102,26 @@ Two distinct degeneracy criteria are used for two distinct purposes:
 
 ---
 
+### 2.6 Stage 2.1 Sim-to-Real Realism Extensions & Field Scope Decision (`stage2-data-v2`)
+
+1. **Field-Range Scope Decision (`[0.05, 3.20] mT` Omnidirectional Benchmark vs. `[3.25, 4.60] mT` In-Window High-Field Regime)**:
+   - **Omnidirectional Geometric Limit**: For an arbitrary 3D field direction $\mathbf{u} \in S^2$ (specifically when $\mathbf{B}$ aligns with one of the $[111]$ axes so $\max_k |B_{\parallel, k}| = |\mathbf{B}|$), the outer hyperfine triplet ($f_{\pm} \pm A_{\parallel}$) remains inside the canonical `[2750, 2990] MHz` sweep window with full wing padding up to $|\mathbf{B}| \le 3.20\text{ mT}$.
+   - **Frozen `src/baseline.py` Radial Confinement Audit**: Programmatic inspection of frozen `src/baseline.py` (`fit_physical_odmr`) confirms four hard/soft mechanisms confining the physical baseline to $[0.05, 3.20]\text{ mT}$:
+     1. `_stage_a_coarse_screen` ([src/baseline.py](file:///c:/Users/mroot/OneDrive/Desktop/workspace/opennv-denoise/src/baseline.py#L422-L433)): coarse magnitude grid `uniform_mags = np.linspace(0.15, 3.05, 11)` and adaptive magnitudes clipped via `np.clip(m_est + delta, 0.08, 3.18)`.
+     2. `_mirror_fold_and_analytic_candidates` ([src/baseline.py](file:///c:/Users/mroot/OneDrive/Desktop/workspace/opennv-denoise/src/baseline.py#L494)): analytic candidate filter `B_MAG_MIN_MT <= b_mag <= B_MAG_MAX_MT` (`[0.05, 3.20] mT`).
+     3. `_run_varproj_pipeline` ([src/baseline.py](file:///c:/Users/mroot/OneDrive/Desktop/workspace/opennv-denoise/src/baseline.py#L774-L819)): TRF Cartesian box bounds `lb[:3] = [-3.30, -3.30, -3.30]`, `ub[:3] = [3.30, 3.30, 3.30]\text{ mT}` and soft radial barrier `rad_pen = 2.0 * max(0.0, b_norm - 3.20) + 2.0 * max(0.0, 0.05 - b_norm)`.
+     4. Final validity classification ([src/baseline.py](file:///c:/Users/mroot/OneDrive/Desktop/workspace/opennv-denoise/src/baseline.py#L868-L881)): `in_range = (0.0499 <= b_mag <= 3.2001) and not window_trunc`, flagging any fit with $|\mathbf{B}| > 3.2001\text{ mT}$ as `out_of_range = True, success = False`.
+   - **Scope Policy**: To keep every comparison against frozen `src/baseline.py` 100% fair and unclipped, the core ID and combined-OOD benchmark splits (`train`, `train_snapshot`, `val_id`, `val_id_natural`, `val_ood`, `test_id`, `test_ood`) remain strictly in **`[0.05, 3.20] mT`**.
+   - **High-Field In-Window Diagnostic Extension (`allow_high_field_in_window=True`, `ood_high_field.npz`)**: Real `trianam_small_field_1..4` traces have $|\mathbf{B}| \in [3.82, 4.41]\text{ mT}$ (`19% – 38%` above `3.20 mT`), yet all 8 dips fit cleanly inside `[2760, 2980] MHz` because their off-axis orientation keeps $\max_k |B_{\parallel, k}| \in [2.66, 3.55]\text{ mT}$. Setting `allow_high_field_in_window=True` with `b_mag_range_mt=(3.25, 4.60)` and `in_window_freq_bounds_mhz=(2760.0, 2980.0)` samples $|\mathbf{B}| \in [3.25, 4.60]\text{ mT}$ and rejection-filters 3D directions $\mathbf{u} \in S^2$ so all 8 exact spin-1 transition frequencies $(f_{-, k}, f_{+, k})$ lie strictly inside $[2760, 2980]\text{ MHz}$. This generates the dedicated diagnostic split **`data/synthetic/ood_high_field.npz`** ($N = 1000$, seed `20260308`).
+
+2. **Per-Axis Contrast Jitter (`per_axis_contrast_jitter: float = 0.0`)**:
+   - Real 4-axis ensemble ODMR traces (`trianam_small_field_1..4`, see [docs/trianam_sim_comparison.md](file:///c:/Users/mroot/OneDrive/Desktop/workspace/opennv-denoise/docs/trianam_sim_comparison.md)) exhibit a **`1.44x – 1.60x`** per-axis dip-depth asymmetry ($\text{std}(\ln w_k) \in [0.144, 0.169]$, mean `0.155`) due to linearly polarized optical excitation/collection and inhomogeneous microwave $B_1$ projection across the four tetrahedral $[111]$ orientations.
+   - When `per_axis_contrast_jitter > 0` (e.g., `0.15` for Stage 3 domain-randomized training), `generate_single_sample` draws log-normal multipliers $z_k \sim \mathcal{N}(0, \sigma^2)$ and normalizes them to mean 1:
+     $$w_k = \frac{4 \exp(z_k)}{\sum_{j=0}^3 \exp(z_j)}, \qquad k \in \{0, 1, 2, 3\}$$
+     (stored in `aux_axis_weights`, shape `(N, 4)`), scaling each axis's effective weight to $0.28 \cdot w_k$ while preserving total ensemble contrast. Default is `0.0` ($w_k \equiv 1.0$) so all existing benchmark splits remain bit-identical.
+
+---
+
 ## 3. Noise, Drift, Hum, and Grid Realism Models (`src/noise_models.py`, Part 2)
 
 ### 3.1 Exact Additive Component Identity
@@ -165,7 +185,7 @@ All noise and artifact components are synthesized on the measurement's **simulat
 | **Drift Family** | `{F1, F2, F4, F5_id}` (`1, 2, 4, 5`) | `{F3, F5_ood}` (`3, 6`) | `ood_drift`: `{F3, F5_ood}` (`3, 6`) | **`0.0%`** (disjoint IDs) |
 | **Hum Harmonics** | $r_2, r_3 \in [0.0,\; 0.50]$ | $r_2, r_3 \in (0.50,\; 0.85]$ (when hum $>0$) | `ood_hum`: $100\%$ hum active, $r_2, r_3 \in (0.50, 0.85]$ | **`0.0%`** (strictly $> 0.50$) |
 | **Grid Realism** | $30\%$ perturbed ($[2760, 2980]$) | $40\%$ perturbed ($[2760, 2980]$) | `ood_grid`: $100\%$ cropped ($[2790, 2950]$) | Diagnostic stress shift |
-| **$|\mathbf{B}|$ (mT)** | $[0.05, 3.20]$ (50% log-unif, 50% unif) | $[0.05, 3.20]$ (50% log-unif, 50% unif) | Same as ID | Shared physical target range |
+| **$|\mathbf{B}|$ (mT)** | $[0.05, 3.20]$ (50% log-unif, 50% unif) | $[0.05, 3.20]$ (50% log-unif, 50% unif) | `ood_high_field`: $[3.25, 4.60]$ (dips $\in [2760, 2980]$) | **`0.0%`** ($0.05\text{ mT}$ gap for `ood_high_field`) |
 | **Voigt $\eta$** | $[0.0,\; 1.0]$ uniform | $[0.0,\; 1.0]$ uniform | Same as ID | Shared line-shape range |
 
 ### Split Sizes, Master Seeds, SHA256 Hashes, and Per-Sample Deterministic Seed Derivation
@@ -176,6 +196,7 @@ Per-sample seeds are derived via `SHA256(struct.pack("<QQ", split_seed, sample_i
 | `train` (Iterable) | Infinite (on-the-fly) | `20260101` | Natural log-uniform $[0.5, 20.0]$ | On-the-fly (`OnTheFlyODMRIterableDataset`) | N/A (stream) |
 | `train_snapshot` | `20,000` | `20260102` | Natural log-uniform $[0.5, 20.0]$ | `data/synthetic/train_snapshot.npz` | `37761c3d40349ae3c0336f208074be2fc33035b1420642f2a2b38b28af4791e8` |
 | `val_id` | `4,000` | `20260201` | Stratified `1333 / 1333 / 1334` | `data/synthetic/val_id.npz` | `294efabc236b362340078d789282654085915e3bb68648f6165573c4f41a48cc` |
+| `val_id_natural` | `1,500` | `20260203` | Natural log-uniform $[0.5, 20.0]$ (`430 / 300 / 770`) | `data/synthetic/val_id_natural.npz` | `20c84af464043f344c6b4518580ca2c81c8f8d63f018c6f01a610a242fc391ad` |
 | `val_ood` | `4,000` | `20260202` | Stratified `1333 / 1333 / 1334` | `data/synthetic/val_ood.npz` | `014df8d74cab853b09771a114750db2fce5afd194c48e96d3d4098d3e4026dfa` |
 | `ood_hwhm` | `1,000` | `20260301` | Natural log-uniform $[0.5, 20.0]$ | `data/synthetic/ood_hwhm.npz` | `643cb17ffd93f0d41fe45fac48dfc88a3e404822846f611a075ef910a4838b19` |
 | `ood_contrast` | `1,000` | `20260302` | Natural log-uniform $[0.5, 20.0]$ | `data/synthetic/ood_contrast.npz` | `9396e1f3efc8b3ee7fb264c0564f4cf0c7ebbd127389b787f226a52f8b4e30a6` |
@@ -184,6 +205,7 @@ Per-sample seeds are derived via `SHA256(struct.pack("<QQ", split_seed, sample_i
 | `ood_drift` | `1,000` | `20260305` | Natural log-uniform $[0.5, 20.0]$ | `data/synthetic/ood_drift.npz` | `c75b7c630e7ffe975c23f397708ea4c56af1408af6017c50eaf4d55f058181c4` |
 | `ood_hum` | `1,000` | `20260306` | Natural log-uniform $[0.5, 20.0]$ | `data/synthetic/ood_hum.npz` | `9b57ed282f1a5320da09dd0373d145a118e7660a3f76f72b7479e5b7be67c340` |
 | `ood_grid` | `1,000` | `20260307` | Natural log-uniform $[0.5, 20.0]$ | `data/synthetic/ood_grid.npz` | `f7998fbb6d7da6fdba218b0fb0b03838d3fca4371a68fac4648bc08fd6dad0c7` |
+| `ood_high_field` | `1,000` | `20260308` | Natural log-uniform $[0.5, 20.0]$ (`317 / 186 / 497`) | `data/synthetic/ood_high_field.npz` | `432b6e668a4fefe4c1a93cdb0aad3a115fabb63de0d8f07ce0a50c9f20614576` |
 | `test_id` | `4,000` | `20260901` | Stratified `1333 / 1333 / 1334` | `data/synthetic/test_id.npz` (LOCKED) | `819e007a1a3fbc45d52df4334fd0ce6906f7e59e31cd22204b023383d63cbf79` |
 | `test_ood` | `4,000` | `20260902` | Stratified `1333 / 1333 / 1334` | `data/synthetic/test_ood.npz` (LOCKED) | `fcdce8033fb0d04cfd5cb7c5ea92b1b9ee7fbfd457556bba00c8a3e02ce627e7` |
 

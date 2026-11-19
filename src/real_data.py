@@ -10,9 +10,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import scipy.io
+from scipy.optimize import least_squares
 from scipy.signal import find_peaks
 
 from src.config import (
+    A_HYPERFINE_MHZ,
     CANONICAL_FREQS,
     CENTRAL_REQUIRED_MAX_MHZ,
     CENTRAL_REQUIRED_MIN_MHZ,
@@ -20,9 +22,15 @@ from src.config import (
     FREQ_MAX_MHZ,
     FREQ_MIN_MHZ,
     GAMMA_E_MHZ_MT,
+    NV_AXES,
 )
 from src.noise import resample_spectrum_pchip
-from src.physics import b_mag_from_splittings
+from src.physics import (
+    b_mag_from_splittings,
+    canonicalize_b_vec,
+    pseudo_voigt_dip,
+    solve_axis_transitions,
+)
 
 DEFAULT_RAW_EXP_DIR: Path = Path("data") / "raw_experimental"
 DEFAULT_REAL_MANIFEST_PATH: Path = Path("data") / "real_eval_manifest.json"
@@ -657,3 +665,357 @@ def build_real_data_evaluation_manifest(
         json.dump(manifest, f, indent=2)
 
     return manifest
+
+
+def audit_trianam_vs_sim_anatomy(
+    raw_dir: Path = DEFAULT_RAW_EXP_DIR,
+    fig_path: Optional[Path] = Path("assets") / "stage2_trianam_vs_sim.png",
+) -> Dict[str, Any]:
+    """Perform Task 1 deep spectral anatomy comparison of ``trianam_small_field_1..4`` vs. simulator.
+
+    Measures directly on each of the 4 experimental 4-axis traces:
+      1. Total peak-to-peak contrast and all 8 individual dip frequencies & depths.
+      2. Per-axis amplitude asymmetry ratio (``max_pair_depth / min_pair_depth``) and
+         relative axis weights ``w_k`` vs. the simulator's equal-axis weighting
+         (``0.28 * |<0|psi0>|^4``).
+      3. Effective linewidth (HWHM, MHz) and pseudo-Voigt ``eta`` (both from isolated
+         outer-dip fits and full 4-axis hyperfine triplet fits).
+      4. Measured zero-field center ``D0`` (both raw pair-centre mean and spin-1
+         Hamiltonian ``D0`` corrected for transverse second-order shift).
+      5. Wing noise RMS, residual PSD log-log slope (white vs. 1/f), and baseline drift
+         excursion outside the dips.
+      6. Generates ``assets/stage2_trianam_vs_sim.png`` overlaying the real traces with
+         both equal-axis and per-axis weighted spin-1 simulations + residuals.
+    """
+    specs = [
+        ("trianam_small_field_1", "trianam_sf1_f.mat", "trianam_sf1_y.mat", 3.8170, [0.7, 2.2, 4.0]),
+        ("trianam_small_field_2", "trianam_sf2_f.mat", "trianam_sf2_y.mat", 4.1862, [0.7, 2.2, 4.5]),
+        ("trianam_small_field_3", "trianam_sf3_f.mat", "trianam_sf3_y.mat", 4.2887, [1.0, 2.4, 4.5]),
+        ("trianam_small_field_4", "trianam_sf4_f.mat", "trianam_sf4_y.mat", 4.4104, [1.0, 2.8, 4.5]),
+    ]
+
+    trace_reports: List[Dict[str, Any]] = []
+    plot_payloads: List[Dict[str, Any]] = []
+
+    for tid, f_file, y_file, b_ref_mt, i_helm in specs:
+        mf = scipy.io.loadmat(raw_dir / f_file)
+        my = scipy.io.loadmat(raw_dir / y_file)
+        kf = [k for k in mf.keys() if not k.startswith("__")][0]
+        ky = [k for k in my.keys() if not k.startswith("__")][0]
+        freqs = np.asarray(mf[kf], dtype=np.float64).squeeze()
+        raw_y = np.asarray(my[ky], dtype=np.float64).squeeze()
+        spec_norm, _ = normalize_odmr_spectrum(raw_y, convention="positive_contrast")
+        absorption = 1.0 - spec_norm
+
+        # 1. Wing noise and baseline drift on outer wings (f < 2762 MHz or f > 2983 MHz)
+        wing_mask = (freqs < 2762.0) | (freqs > 2983.0)
+        u_grid = (freqs - 2875.0) / 135.0
+        wing_poly = np.polyfit(u_grid[wing_mask], spec_norm[wing_mask], deg=2)
+        baseline_est = np.polyval(wing_poly, u_grid)
+        drift_amp_wing = float(0.5 * (np.max(baseline_est) - np.min(baseline_est)))
+        wing_resid = spec_norm[wing_mask] - baseline_est[wing_mask]
+        wing_noise_rms = float(np.std(wing_resid))
+
+        # 2. Extract 8 primary Zeeman dips (top 8 by prominence)
+        pks, props = find_peaks(absorption, distance=4, prominence=0.002)
+        top8 = np.argsort(props["prominences"])[::-1][:8]
+        pk8 = np.sort(pks[top8])
+        dip_freqs_8 = freqs[pk8]
+        dip_depths_8 = (baseline_est[pk8] - spec_norm[pk8])
+        ptp_contrast = float(np.max(spec_norm) - np.min(spec_norm))
+
+        # Pair the 8 dips from innermost (k=0) to outermost (k=3)
+        # pk8 is sorted ascending: indices (3,4) are inner pair k=0; (0,7) are outer pair k=3
+        pair_fm_exp = np.array([dip_freqs_8[3 - k] for k in range(4)], dtype=np.float64)
+        pair_fp_exp = np.array([dip_freqs_8[4 + k] for k in range(4)], dtype=np.float64)
+        pair_dm_exp = np.array([dip_depths_8[3 - k] for k in range(4)], dtype=np.float64)
+        pair_dp_exp = np.array([dip_depths_8[4 + k] for k in range(4)], dtype=np.float64)
+        pair_mean_depths = 0.5 * (pair_dm_exp + pair_dp_exp)
+        pair_centres_raw = 0.5 * (pair_fm_exp + pair_fp_exp)
+        pair_splittings = pair_fp_exp - pair_fm_exp
+
+        inter_axis_asym_ratio = float(np.max(pair_mean_depths) / max(float(np.min(pair_mean_depths)), 1e-9))
+        intra_pair_ratios = (pair_dm_exp / np.maximum(pair_dp_exp, 1e-9)).tolist()
+
+        # 3. Fit isolated pseudo-Voigt profile to outermost pair (f_{-,3}, f_{+,3}) for direct HWHM & eta
+        outer_single_hwhms = []
+        outer_single_etas = []
+        for f_center_0, d_0 in ((pair_fm_exp[3], pair_dm_exp[3]), (pair_fp_exp[3], pair_dp_exp[3])):
+            local_mask = np.abs(freqs - f_center_0) <= 11.0
+            f_loc = freqs[local_mask]
+            y_loc = (baseline_est[local_mask] - spec_norm[local_mask])
+
+            def _single_dip_res(p: np.ndarray) -> np.ndarray:
+                # p = [f0, amp, hwhm, eta]
+                return pseudo_voigt_dip(f_loc, p[0], p[1], p[2], p[3]) - y_loc
+
+            res_loc = least_squares(
+                _single_dip_res,
+                x0=np.array([f_center_0, d_0, 4.5, 0.35]),
+                bounds=(
+                    np.array([f_center_0 - 3.0, 0.001, 1.5, 0.0]),
+                    np.array([f_center_0 + 3.0, 0.050, 14.0, 1.0]),
+                ),
+            )
+            outer_single_hwhms.append(float(res_loc.x[2]))
+            outer_single_etas.append(float(res_loc.x[3]))
+
+        eff_single_dip_hwhm = float(np.mean(outer_single_hwhms))
+        eff_single_dip_eta = float(np.mean(outer_single_etas))
+
+        # 4. Fit exact 3D spin-1 Hamiltonian (Bx, By, Bz, D0) to the 8 experimental transition frequencies
+        # Initialize from analytic reconstruction of the 4 half-splittings
+        p_init = 0.5 * pair_splittings / GAMMA_E_MHZ_MT
+        # Sign pattern (-p0, -p1, +p2, +p3) or best zero-sum pattern
+        best_b0 = np.array([0.8, 1.8, 3.3], dtype=np.float64)
+        best_s_err = np.inf
+        for s0 in (-1.0, 1.0):
+            for s1 in (-1.0, 1.0):
+                for s2 in (-1.0, 1.0):
+                    q = np.array([s0 * p_init[0], s1 * p_init[1], s2 * p_init[2], p_init[3]])
+                    if abs(np.sum(q)) < best_s_err:
+                        best_s_err = abs(np.sum(q))
+                        best_b0 = canonicalize_b_vec(0.75 * (NV_AXES.T @ q))
+
+        def _freq_8_resid(theta_b_d0: np.ndarray) -> np.ndarray:
+            bv = theta_b_d0[:3]
+            d0_v = float(theta_b_d0[3])
+            bp = np.abs(NV_AXES @ bv)
+            bsq = float(np.dot(bv, bv))
+            bperp = np.sqrt(np.maximum(0.0, bsq - bp * bp))
+            fm_m, fp_m, _ = solve_axis_transitions(bp, bperp, d0=d0_v)
+            order_k = np.argsort(fp_m - fm_m)
+            return np.concatenate([fm_m[order_k] - pair_fm_exp, fp_m[order_k] - pair_fp_exp])
+
+        res_ham = least_squares(
+            _freq_8_resid,
+            x0=np.array([best_b0[0], best_b0[1], best_b0[2], float(np.mean(pair_centres_raw)) - 1.2]),
+            bounds=(np.array([0.0, 0.0, 0.0, 2860.0]), np.array([5.0, 5.0, 5.0, 2885.0])),
+        )
+        b_ham_canon = canonicalize_b_vec(res_ham.x[:3])
+        b_ham_mag = float(np.linalg.norm(b_ham_canon))
+        d0_ham_mhz = float(res_ham.x[3])
+
+        # Compute exact spin-1 transition frequencies & contrast factors at (b_ham_canon, d0_ham_mhz)
+        bp_h = np.abs(NV_AXES @ b_ham_canon)
+        bperp_h = np.sqrt(np.maximum(0.0, b_ham_mag * b_ham_mag - bp_h * bp_h))
+        fm_h, fp_h, cf_h = solve_axis_transitions(bp_h, bperp_h, d0=d0_ham_mhz)
+        ord_h = np.argsort(fp_h - fm_h)
+        fm_h = fm_h[ord_h]
+        fp_h = fp_h[ord_h]
+        cf_h = cf_h[ord_h]
+        sim_cf_asym_ratio = float(np.max(cf_h) / max(float(np.min(cf_h)), 1e-9))
+
+        # Relative empirical axis weights w_k after accounting for spin-mixing contrast factor cf_h
+        raw_wk = pair_mean_depths / np.maximum(cf_h, 1e-9)
+        rel_axis_weights = (raw_wk / np.mean(raw_wk)).tolist()
+        rel_axis_log_std = float(np.std(np.log(np.maximum(rel_axis_weights, 1e-6))))
+
+        # 5. Fit full 4-axis hyperfine spectrum model (Equal-Axis vs. Per-Axis Weighted)
+        def _build_axis_profiles(hwhm_v: float, eta_v: float, d0_shift: float) -> np.ndarray:
+            # Returns (4, N) unit-amplitude hyperfine-summed profiles for the 4 ordered axes
+            profs = np.zeros((4, freqs.size), dtype=np.float64)
+            for k in range(4):
+                for fc in (fm_h[k] + d0_shift, fp_h[k] + d0_shift):
+                    for dhf in (-A_HYPERFINE_MHZ, 0.0, A_HYPERFINE_MHZ):
+                        profs[k] += (1.0 / 3.0) * pseudo_voigt_dip(
+                            freqs, fc + dhf, 1.0, hwhm_v, eta_v
+                        )
+            return profs
+
+        # (a) Equal-axis simulator fit: [C_base, hwhm_hf, eta_hf, d0_fine, bl_0, bl_1]
+        def _eq_axis_resid(p: np.ndarray) -> np.ndarray:
+            c_base, hw_v, et_v, d0_s, b0, b1 = p
+            profs = _build_axis_profiles(hw_v, et_v, d0_s)
+            weights = c_base * 0.28 * cf_h
+            model = (1.0 + b0 + b1 * u_grid) - (weights @ profs)
+            return model - spec_norm
+
+        res_eq = least_squares(
+            _eq_axis_resid,
+            x0=np.array([0.045, 3.6, 0.35, 0.0, 0.0, 0.0]),
+            bounds=(
+                np.array([0.005, 1.2, 0.0, -2.0, -0.02, -0.02]),
+                np.array([0.150, 12.0, 1.0, 2.0, 0.02, 0.02]),
+            ),
+        )
+        c_eq, hw_eq, et_eq, d0s_eq, b0_eq, b1_eq = res_eq.x
+        profs_eq = _build_axis_profiles(float(hw_eq), float(et_eq), float(d0s_eq))
+        sim_equal_axis = (1.0 + b0_eq + b1_eq * u_grid) - ((c_eq * 0.28 * cf_h) @ profs_eq)
+        resid_equal_axis = spec_norm - sim_equal_axis
+        rms_equal_axis = float(np.sqrt(np.mean(resid_equal_axis ** 2)))
+
+        # (b) Per-axis weighted simulator fit (solving 4 non-negative axis amplitudes + linear baseline)
+        X_weighted = np.column_stack([profs_eq.T, np.ones_like(u_grid), u_grid])
+        coef_w, _, _, _ = np.linalg.lstsq(X_weighted, 1.0 - spec_norm, rcond=None)
+        axis_amps_w = np.maximum(0.0, coef_w[:4])
+        sim_weighted_axis = (1.0 - coef_w[4] - coef_w[5] * u_grid) - (axis_amps_w @ profs_eq)
+        resid_weighted_axis = spec_norm - sim_weighted_axis
+        rms_weighted_axis = float(np.sqrt(np.mean(resid_weighted_axis ** 2)))
+
+        # 6. Residual PSD slope (log10 PSD vs log10 normalized frequency on [f_1 .. f_Nyquist])
+        fft_vals = np.fft.rfft(resid_weighted_axis - np.mean(resid_weighted_axis))
+        psd = (np.abs(fft_vals) ** 2) / float(freqs.size)
+        f_fft = np.fft.rfftfreq(freqs.size)
+        valid_f = f_fft > 0.02  # exclude lowest DC/drift bins
+        psd_slope = float(
+            np.polyfit(np.log10(f_fft[valid_f]), np.log10(np.maximum(psd[valid_f], 1e-18)), deg=1)[0]
+        )
+
+        trace_reports.append(
+            {
+                "trace_id": tid,
+                "n_points": int(freqs.size),
+                "freq_range_mhz": [float(freqs[0]), float(freqs[-1])],
+                "helmholtz_coil_currents_amp": i_helm,
+                "ground_truth_b_mt": b_ref_mt,
+                "hamiltonian_fitted_b_mt": round(b_ham_mag, 4),
+                "b_canon_mt": [round(float(x), 4) for x in b_ham_canon],
+                "raw_pair_centre_mean_mhz": round(float(np.mean(pair_centres_raw)), 3),
+                "raw_pair_centre_offset_mhz": round(float(np.mean(pair_centres_raw) - D0_MHZ), 3),
+                "hamiltonian_d0_mhz": round(d0_ham_mhz + float(d0s_eq), 3),
+                "hamiltonian_d0_offset_mhz": round(d0_ham_mhz + float(d0s_eq) - D0_MHZ, 3),
+                "total_ptp_contrast": round(ptp_contrast, 5),
+                "fitted_base_contrast_c": round(float(c_eq), 5),
+                "dip_freqs_8_mhz": [round(float(x), 2) for x in dip_freqs_8],
+                "dip_depths_8": [round(float(x), 5) for x in dip_depths_8],
+                "pair_mean_depths_inner_to_outer": [round(float(x), 5) for x in pair_mean_depths],
+                "exp_inter_axis_depth_ratio_max_over_min": round(inter_axis_asym_ratio, 3),
+                "sim_equal_axis_cf_ratio_max_over_min": round(sim_cf_asym_ratio, 3),
+                "relative_axis_weights_wk": [round(float(x), 3) for x in rel_axis_weights],
+                "relative_axis_log_std": round(rel_axis_log_std, 3),
+                "intra_pair_minus_over_plus_ratios": [round(float(x), 3) for x in intra_pair_ratios],
+                "isolated_outer_single_dip_hwhm_mhz": round(eff_single_dip_hwhm, 3),
+                "isolated_outer_single_dip_eta": round(eff_single_dip_eta, 3),
+                "hyperfine_triplet_hwhm_mhz": round(float(hw_eq), 3),
+                "hyperfine_triplet_eta": round(float(et_eq), 3),
+                "wing_noise_rms": round(wing_noise_rms, 6),
+                "wing_drift_amp": round(drift_amp_wing, 6),
+                "residual_psd_log_slope": round(psd_slope, 3),
+                "equal_axis_sim_residual_rms": round(rms_equal_axis, 5),
+                "per_axis_weighted_sim_residual_rms": round(rms_weighted_axis, 5),
+            }
+        )
+        plot_payloads.append(
+            {
+                "tid": tid,
+                "freqs": freqs,
+                "spec_norm": spec_norm,
+                "sim_equal": sim_equal_axis,
+                "sim_weighted": sim_weighted_axis,
+                "resid_equal": resid_equal_axis,
+                "resid_weighted": resid_weighted_axis,
+                "meta": trace_reports[-1],
+            }
+        )
+
+    if fig_path is not None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, axes = plt.subplots(
+            2, 4, figsize=(19.0, 7.6), sharex="col", gridspec_kw={"height_ratios": [2.2, 1.0]}
+        )
+        for col_i, item in enumerate(plot_payloads):
+            ax_top = axes[0, col_i]
+            ax_bot = axes[1, col_i]
+            m = item["meta"]
+            f_arr = item["freqs"]
+
+            ax_top.plot(
+                f_arr, item["spec_norm"], color="#111111", lw=1.35, label="Real Experimental (trianam)"
+            )
+            ax_top.plot(
+                f_arr,
+                item["sim_equal"],
+                color="#d62728",
+                ls="--",
+                lw=1.35,
+                label=f"Sim Equal-Axis (RMS={m['equal_axis_sim_residual_rms']:.4f})",
+            )
+            ax_top.plot(
+                f_arr,
+                item["sim_weighted"],
+                color="#1f77b4",
+                ls="-.",
+                lw=1.35,
+                label=f"Sim Per-Axis Weighted (RMS={m['per_axis_weighted_sim_residual_rms']:.4f})",
+            )
+            ax_top.set_title(
+                f"{m['trace_id']} (|B|={m['ground_truth_b_mt']:.3f} mT)\n"
+                f"D0={m['hamiltonian_d0_mhz']:.2f} MHz (dD0=+{m['hamiltonian_d0_offset_mhz']:.2f}), "
+                f"HWHM_hf={m['hyperfine_triplet_hwhm_mhz']:.2f} MHz\n"
+                f"Axis Asym={m['exp_inter_axis_depth_ratio_max_over_min']:.2f}x (Sim Equal={m['sim_equal_axis_cf_ratio_max_over_min']:.2f}x)",
+                fontsize=8.5,
+                fontweight="bold",
+            )
+            ax_top.grid(True, linestyle=":", alpha=0.45)
+            ax_top.legend(loc="lower right", fontsize=7.2)
+
+            ax_bot.axhline(0.0, color="#666666", lw=0.8, ls=":")
+            ax_bot.plot(
+                f_arr, item["resid_equal"], color="#d62728", lw=0.95, alpha=0.85, label="Equal-Axis Resid"
+            )
+            ax_bot.plot(
+                f_arr, item["resid_weighted"], color="#1f77b4", lw=0.95, alpha=0.90, label="Per-Axis Weighted Resid"
+            )
+            ax_bot.set_xlabel("Microwave Frequency (MHz)", fontsize=9)
+            ax_bot.grid(True, linestyle=":", alpha=0.45)
+            if col_i == 0:
+                ax_top.set_ylabel("Norm. Fluorescence", fontsize=9.5)
+                ax_bot.set_ylabel("Residual (Exp - Sim)", fontsize=9.5)
+                ax_bot.legend(loc="upper right", fontsize=7.0)
+
+        fig.suptitle(
+            "OpenNV-Denoise Stage 2.1 — Spectral Anatomy Comparison: Real Experimental (Haim et al. 2024) vs. Spin-1 Simulator",
+            fontsize=11.5,
+            fontweight="bold",
+            y=1.02,
+        )
+        fig.tight_layout()
+        fig_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(fig_path, dpi=170, bbox_inches="tight")
+        plt.close(fig)
+
+    return {
+        "traces": trace_reports,
+        "summary": {
+            "b_mag_range_mt": [
+                min(r["ground_truth_b_mt"] for r in trace_reports),
+                max(r["ground_truth_b_mt"] for r in trace_reports),
+            ],
+            "hamiltonian_d0_offset_range_mhz": [
+                min(r["hamiltonian_d0_offset_mhz"] for r in trace_reports),
+                max(r["hamiltonian_d0_offset_mhz"] for r in trace_reports),
+            ],
+            "raw_pair_centre_offset_range_mhz": [
+                min(r["raw_pair_centre_offset_mhz"] for r in trace_reports),
+                max(r["raw_pair_centre_offset_mhz"] for r in trace_reports),
+            ],
+            "exp_inter_axis_depth_ratio_range": [
+                min(r["exp_inter_axis_depth_ratio_max_over_min"] for r in trace_reports),
+                max(r["exp_inter_axis_depth_ratio_max_over_min"] for r in trace_reports),
+            ],
+            "mean_relative_axis_log_std": round(
+                float(np.mean([r["relative_axis_log_std"] for r in trace_reports])), 3
+            ),
+            "hyperfine_hwhm_range_mhz": [
+                min(r["hyperfine_triplet_hwhm_mhz"] for r in trace_reports),
+                max(r["hyperfine_triplet_hwhm_mhz"] for r in trace_reports),
+            ],
+            "isolated_single_dip_hwhm_range_mhz": [
+                min(r["isolated_outer_single_dip_hwhm_mhz"] for r in trace_reports),
+                max(r["isolated_outer_single_dip_hwhm_mhz"] for r in trace_reports),
+            ],
+            "fitted_base_contrast_range": [
+                min(r["fitted_base_contrast_c"] for r in trace_reports),
+                max(r["fitted_base_contrast_c"] for r in trace_reports),
+            ],
+            "wing_noise_rms_range": [
+                min(r["wing_noise_rms"] for r in trace_reports),
+                max(r["wing_noise_rms"] for r in trace_reports),
+            ],
+        },
+    }

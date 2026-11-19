@@ -137,9 +137,12 @@ def evaluate_transitions_on_grid(
     hwhm_mhz: float,
     contrast: float,
     eta: float,
+    axis_weights: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Evaluate 4-axis clean ODMR spectrum and per-axis single-branch dip depths in one pass."""
     eff_amp = (contrast * 0.28 / 3.0) * cf_arr  # (4,)
+    if axis_weights is not None:
+        eff_amp = eff_amp * np.asarray(axis_weights, dtype=np.float64)
     f0 = np.empty((4, 6), dtype=np.float64)
     f0[:, 0] = fm_arr - A_HYPERFINE_MHZ
     f0[:, 1] = fm_arr
@@ -166,7 +169,8 @@ def fast_simulate_single_clean_odmr(
     contrast: float,
     eta: float,
     e_mhz: float = 0.0,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    axis_weights: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Fast single-spectrum exact spin-1 ODMR evaluator matching ``simulate_clean_odmr`` to <1e-14.
 
     Args:
@@ -222,7 +226,7 @@ def fast_simulate_single_clean_odmr(
     cf_arr = purity_ms0 * purity_ms0
 
     spectrum, per_axis_depths = evaluate_transitions_on_grid(
-        freqs, fm_arr, fp_arr, cf_arr, hwhm_mhz, contrast, eta
+        freqs, fm_arr, fp_arr, cf_arr, hwhm_mhz, contrast, eta, axis_weights=axis_weights
     )
     splittings_sorted = np.sort(fp_arr - fm_arr)
     return spectrum, splittings_sorted, b_par, b_perp, fm_arr, fp_arr, cf_arr, per_axis_depths
