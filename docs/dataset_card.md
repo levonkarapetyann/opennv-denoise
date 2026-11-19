@@ -122,6 +122,29 @@ Two distinct degeneracy criteria are used for two distinct purposes:
 
 ---
 
+### 2.7 Stage 2.2 Sim-to-Real Upgrade: Controlled Per-Axis Asymmetry, RF Power Tilt & `train_sim2real` (`stage2-data-v3`)
+
+1. **Exact Target-Ratio Per-Axis Weight Randomization (`axis_asym_range`, `axis_equal_prob`)**:
+   - To guarantee exact coverage of a specified max/min per-axis weight ratio interval $[\text{axis\_asym\_min}, \text{axis\_asym\_max}]$ without rejection loops:
+     - With probability `axis_equal_prob` (e.g., `0.20` in `train_sim2real`), set $\mathbf{w} = (1, 1, 1, 1)$ (`axis_asym_ratio = 1.0`).
+     - Otherwise, draw $r_{\text{target}} \sim \mathcal{U}(\text{axis\_asym\_min}, \text{axis\_asym\_max})$, sample raw log-weights $u_k \sim \mathcal{N}(0, 1)$ ($k=0..3$), center $u_k \leftarrow u_k - \bar{u}$, rescale so $\max(\mathbf{u}) - \min(\mathbf{u}) = \ln(r_{\text{target}})$, and normalize:
+       $$w_k = \frac{\exp(u_k)}{\frac{1}{4}\sum_{j=0}^3 \exp(u_j)} \implies \text{mean}(\mathbf{w}) = 1.0, \quad \frac{\max_k w_k}{\min_k w_k} = r_{\text{target}}$$
+     - Stored in `aux_axis_weights` (shape `(N, 4)`, `float32`) and `aux_axis_asym_ratio` (shape `(N,)`, `float32`).
+
+2. **Smooth RF Power Roll-Off / Intra-Pair Depth Tilt (`mw_power_tilt_amp`, `mw_power_tilt_prob`)**:
+   - Real COTS microwave sources and loops (e.g., ADF4351 across `2750–2990 MHz`) exhibit mild frequency-dependent RF power roll-off, producing slight depth asymmetry between the lower ($f_{-, k}$) and upper ($f_{+, k}$) branches of the same NV axis.
+   - When active (with probability `mw_power_tilt_prob`), a smooth degree-2 Legendre modulation envelope on normalized frequency $u(f) = \text{clip}\!\left(\frac{f - 2870.0}{120.0}, -1, 1\right) \in [-1, 1]$ is constructed:
+     $$m(f) = 1.0 + c_1 u(f) + c_2 \left(u(f)^2 - \tfrac{1}{3}\right), \qquad \max_{u \in [-1, 1]} |m(u) - 1.0| = A_{\text{tilt}} \implies m(f) \in [1 - A_{\text{tilt}},\; 1 + A_{\text{tilt}}]$$
+     and applied directly to the clean dip absorption profile:
+     $$Y_{\text{clean}}(f) = 1.0 - m(f) \cdot \left(1.0 - S_{\text{dips}}(f; \mathbf{w})\right)$$
+   - **Target Semantics**: Both $\mathbf{w}$ and $m(f)$ are physical properties of the clean spectrum **`Y_clean`** (not additive noise), so Stage 3 neural denoisers learn to preserve true asymmetric dip shapes while still satisfying the exact `float64` additive identity $Y_{\text{clean}} + \text{drift} + \text{hum} + \text{pink} + \text{white} + \text{other} = X_{\text{noisy, f64}}$ to $< 10^{-12}$.
+
+3. **Stage 3 On-the-Fly Training Preset (`train_sim2real`, `get_stage3_sim2real_train_config`)**:
+   - `split_seed = 20260103`, `hwhm_range_mhz = (2.0, 9.0)` MHz (covering `trianam` hyperfine-deconvolved `2.75–2.96 MHz`), `axis_asym_range = (1.0, 2.0)` with `axis_equal_prob = 0.20`, `mw_power_tilt_amp = 0.12` with `mw_power_tilt_prob = 0.70`, while strictly excluding all OOD drift families (`F3`, `F5_ood`), Student-$t$ noise, impulse spikes, and $\text{HWHM} > 9.0\text{ MHz}$.
+   - Measured throughput: **`466.1 spectra/s`** (single process) and **`1,031.7 spectra/s`** (`n_workers = 4`).
+
+---
+
 ## 3. Noise, Drift, Hum, and Grid Realism Models (`src/noise_models.py`, Part 2)
 
 ### 3.1 Exact Additive Component Identity
@@ -186,6 +209,7 @@ All noise and artifact components are synthesized on the measurement's **simulat
 | **Hum Harmonics** | $r_2, r_3 \in [0.0,\; 0.50]$ | $r_2, r_3 \in (0.50,\; 0.85]$ (when hum $>0$) | `ood_hum`: $100\%$ hum active, $r_2, r_3 \in (0.50, 0.85]$ | **`0.0%`** (strictly $> 0.50$) |
 | **Grid Realism** | $30\%$ perturbed ($[2760, 2980]$) | $40\%$ perturbed ($[2760, 2980]$) | `ood_grid`: $100\%$ cropped ($[2790, 2950]$) | Diagnostic stress shift |
 | **$|\mathbf{B}|$ (mT)** | $[0.05, 3.20]$ (50% log-unif, 50% unif) | $[0.05, 3.20]$ (50% log-unif, 50% unif) | `ood_high_field`: $[3.25, 4.60]$ (dips $\in [2760, 2980]$) | **`0.0%`** ($0.05\text{ mT}$ gap for `ood_high_field`) |
+| **Per-Axis Asym & RF Tilt** | `train_sim2real`: $\text{HWHM} \in [2, 9]$, $\frac{\max w}{\min w} \in [1, 2]$, tilt $\pm 12\%$ | Equal-axis ($1.0\times$), tilt $0\%$ | `ood_asym`: $\text{HWHM} \in [2, 9]$, $\frac{\max w}{\min w} \in [1.35, 2.20]$, tilt $\pm 12\%$ | Sim-to-Real crystal/antenna shift |
 | **Voigt $\eta$** | $[0.0,\; 1.0]$ uniform | $[0.0,\; 1.0]$ uniform | Same as ID | Shared line-shape range |
 
 ### Split Sizes, Master Seeds, SHA256 Hashes, and Per-Sample Deterministic Seed Derivation
@@ -194,6 +218,7 @@ Per-sample seeds are derived via `SHA256(struct.pack("<QQ", split_seed, sample_i
 | Split Name | Sample Count $N$ | Master Split Seed | Regime Stratification | File Path | Raw-Byte SHA256 Digest |
 | :--- | :---: | :---: | :--- | :--- | :--- |
 | `train` (Iterable) | Infinite (on-the-fly) | `20260101` | Natural log-uniform $[0.5, 20.0]$ | On-the-fly (`OnTheFlyODMRIterableDataset`) | N/A (stream) |
+| `train_sim2real` (Iterable) | Infinite (on-the-fly) | `20260103` | Natural log-uniform $[0.5, 20.0]$ | On-the-fly (`get_stage3_sim2real_train_config()`) | N/A (stream) |
 | `train_snapshot` | `20,000` | `20260102` | Natural log-uniform $[0.5, 20.0]$ | `data/synthetic/train_snapshot.npz` | `37761c3d40349ae3c0336f208074be2fc33035b1420642f2a2b38b28af4791e8` |
 | `val_id` | `4,000` | `20260201` | Stratified `1333 / 1333 / 1334` | `data/synthetic/val_id.npz` | `294efabc236b362340078d789282654085915e3bb68648f6165573c4f41a48cc` |
 | `val_id_natural` | `1,500` | `20260203` | Natural log-uniform $[0.5, 20.0]$ (`430 / 300 / 770`) | `data/synthetic/val_id_natural.npz` | `20c84af464043f344c6b4518580ca2c81c8f8d63f018c6f01a610a242fc391ad` |
@@ -206,6 +231,7 @@ Per-sample seeds are derived via `SHA256(struct.pack("<QQ", split_seed, sample_i
 | `ood_hum` | `1,000` | `20260306` | Natural log-uniform $[0.5, 20.0]$ | `data/synthetic/ood_hum.npz` | `9b57ed282f1a5320da09dd0373d145a118e7660a3f76f72b7479e5b7be67c340` |
 | `ood_grid` | `1,000` | `20260307` | Natural log-uniform $[0.5, 20.0]$ | `data/synthetic/ood_grid.npz` | `f7998fbb6d7da6fdba218b0fb0b03838d3fca4371a68fac4648bc08fd6dad0c7` |
 | `ood_high_field` | `1,000` | `20260308` | Natural log-uniform $[0.5, 20.0]$ (`317 / 186 / 497`) | `data/synthetic/ood_high_field.npz` | `432b6e668a4fefe4c1a93cdb0aad3a115fabb63de0d8f07ce0a50c9f20614576` |
+| `ood_asym` | `1,000` | `20260309` | Natural log-uniform $[0.5, 20.0]$ (`288 / 176 / 536`) | `data/synthetic/ood_asym.npz` | `a5498d1b570240ac1a17f3b3e918abbb82bfa4324b96f5ebd2a4b267f3e6525b` |
 | `test_id` | `4,000` | `20260901` | Stratified `1333 / 1333 / 1334` | `data/synthetic/test_id.npz` (LOCKED) | `819e007a1a3fbc45d52df4334fd0ce6906f7e59e31cd22204b023383d63cbf79` |
 | `test_ood` | `4,000` | `20260902` | Stratified `1333 / 1333 / 1334` | `data/synthetic/test_ood.npz` (LOCKED) | `fcdce8033fb0d04cfd5cb7c5ea92b1b9ee7fbfd457556bba00c8a3e02ce627e7` |
 

@@ -1,9 +1,9 @@
-# OpenNV-Denoise Stage 2 / 2.1 Data Validation & Reference Estimator Report (`stage2-data-v2`)
+# OpenNV-Denoise Stage 2 / 2.1 / 2.2 Data Validation & Reference Estimator Report (`stage2-data-v3`)
 
-This report documents the empirical distributions, disjoint support verification, numerical consistency checks, dry-run twin audit, real experimental data import status, deep `trianam` spectral anatomy comparison, worst-case failure diagnostics, and expanded reference estimator benchmarks for **OpenNV-Denoise Stage 2.1 (`stage2-data-v2`)**.
+This report documents the empirical distributions, disjoint support verification, numerical consistency checks, dry-run twin audit, real experimental data import status, deep `trianam` spectral anatomy comparison, Stage 2.2 Sim-to-Real upgrade (`train_sim2real` & `ood_asym.npz`), worst-case failure diagnostics, and expanded reference estimator benchmarks for **OpenNV-Denoise Stage 2.2 (`stage2-data-v3`)**.
 
 > [!IMPORTANT]
-> **Locked Test-Set Integrity**: All tables, figures, and statistics in this report are built **exclusively** from `train_snapshot`, `val_id`, `val_id_natural`, `val_ood`, the 8 single-factor `ood_*` validation sets (including `ood_high_field`), and the deleted dry-run twins (`twin_test_id`, `twin_test_ood`). The locked test files (`test_id.npz`, `test_ood.npz`) were never opened or parsed (`data_read = 0` in [`data/synthetic/test_access.log`](../data/synthetic/test_access.log)).
+> **Locked Test-Set Integrity**: All tables, figures, and statistics in this report are built **exclusively** from `train_snapshot`, `train_sim2real`, `val_id`, `val_id_natural`, `val_ood`, the 9 single-factor `ood_*` validation sets (including `ood_high_field` and `ood_asym`), and the deleted dry-run twins (`twin_test_id`, `twin_test_ood`). The locked test files (`test_id.npz`, `test_ood.npz`) were never opened or parsed (`data_read = 0` in [`data/synthetic/test_access.log`](../data/synthetic/test_access.log)).
 
 ---
 
@@ -38,8 +38,10 @@ Consequently, all primary ID/OOD benchmark splits (`train`, `train_snapshot`, `v
 ## 2. Generator Throughput & Split Manifest Summary (Part 4 & Stage 2.1)
 
 Measured on the canonical 512-point grid (including 30%–100% PCHIP resampling for perturbed grids):
-- **Single-Process Throughput (`n_workers = 1`, $N = 2000$)**: **`408.0 spectra/s`** (`4.902 s` for 2,000 samples; **`464.2 spectra/s`** on 1,000 samples).
-- **Multi-Worker Throughput (`n_workers = 4`, warm pool)**: **`1,100.0 – 1,186.0 spectra/s`** across splits (`3.373 s` for 4,000 samples in `test_id.npz`; `20.748 s` for 20,000 samples in `train_snapshot.npz`).
+- **Standard `train` Single-Process Throughput (`n_workers = 1`, $N = 2000$)**: **`408.0 spectra/s`** (`4.902 s` for 2,000 samples; **`464.2 spectra/s`** on 1,000 samples); **Multi-Worker (`n_workers = 4`)**: **`1,100.0 – 1,186.0 spectra/s`**.
+- **Stage 2.2 `train_sim2real` On-the-Fly Throughput (`get_stage3_sim2real_train_config()`)**:
+  - **Single-Process (`n_workers = 1`, $N = 2000$)**: **`466.1 spectra/s`** (`4.291 s` for 2,000 samples).
+  - **Multi-Worker (`n_workers = 4`, $N = 8000$)**: **`1,031.7 spectra/s`** (`7.755 s` for 8,000 samples).
 
 ### Generated Splits & SHA256 Checksums (`data/synthetic/manifest.json`)
 | Split Name | $N$ | Master Seed | Regime Counts (Hard / Med / Easy) | Regime Proportions | $|\mathbf{B}|$ Range (mT) | Raw-Byte SHA256 |
@@ -56,9 +58,11 @@ Measured on the canonical 512-point grid (including 30%–100% PCHIP resampling 
 | `ood_hum` | `1,000` | `20260306` | `279 / 184 / 537` | `27.9% / 18.4% / 53.7%` (Natural) | `[0.05, 3.20]` | `9b57ed282f1a5320...` |
 | `ood_grid` | `1,000` | `20260307` | `266 / 193 / 541` | `26.6% / 19.3% / 54.1%` (Natural) | `[0.05, 3.20]` | `f7998fbb6d7da6fd...` |
 | `ood_high_field` | `1,000` | `20260308` | `317 / 186 / 497` | `31.7% / 18.6% / 49.7%` (Natural) | **`[3.25, 4.60]`** | `432b6e668a4fefe4...` |
+| `ood_asym` | `1,000` | `20260309` | `288 / 176 / 536` | `28.8% / 17.6% / 53.6%` (Natural) | `[0.05, 3.20]` | `a5498d1b570240ac...` |
 | `test_id` (LOCKED) | `4,000` | `20260901` | `1333 / 1333 / 1334` | `33.3% / 33.3% / 33.4%` (Stratified) | `[0.05, 3.20]` | `819e007a1a3fbc45...` |
 | `test_ood` (LOCKED) | `4,000` | `20260902` | `1333 / 1333 / 1334` | `33.3% / 33.3% / 33.4%` (Stratified) | `[0.05, 3.20]` | `fcdce8033fb0d04c...` |
 | `val_baseline_ref` | `6,800` fits | Ref Cache | Per-spectrum baseline predictions/errors | Saved for Stage 3 paired Wilcoxon/bootstrap | — | `906b78e739b17e74...` |
+| `ood_asym_baseline_ref` | `200` fits | Ref Cache | Per-spectrum `ood_asym` baseline results | Saved for Stage 3 asymmetry evaluation | — | `db7d7ac1ea01bcd4...` |
 
 *(Theoretical natural log-uniform proportions on $[0.5, 20.0]$: Hard $29.79\%$, Medium $18.79\%$, Easy $51.42\%$).*
 
@@ -82,6 +86,8 @@ Every non-test split and the deleted dry-run twins (`twin_test_id` seed `999901`
 | `ood_hum` | `0` | `0.00e+00` | `0.00e+00` | `2.66e-15` | `7.58e-06` | `0.00015` |
 | `ood_grid` | `0` | `0.00e+00` | `0.00e+00` | `2.78e-15` | `7.28e-06` | `0.00012` |
 | `ood_high_field` | `0` | `0.00e+00` | `0.00e+00` | `1.89e-15` | `7.62e-06` | `0.00179` |
+| `ood_asym` | `0` | `0.00e+00` | `0.00e+00` | `0.00e+00` | `7.61e-06` | `0.00013` |
+| `train_sim2real` (1k Audit) | `0` | `0.00e+00` | `0.00e+00` | `0.00e+00` | `7.52e-06` | `0.00013` |
 | `twin_test_id` (Deleted) | `0` | `0.00e+00` | `0.00e+00` | `3.44e-15` | `7.44e-06` | `0.00014` |
 | `twin_test_ood` (Deleted) | `0` | `0.00e+00` | `0.00e+00` | `3.66e-15` | `7.61e-06` | `0.00014` |
 
@@ -110,6 +116,8 @@ Evaluating Stage 2 `eff_snr_total = depth_outer / sqrt(sigma_white_eff^2 + RMS(d
 | `ood_hum` | `[0.0510, 0.9980, 3.1898]` | `14.22 / 28.06 / 40.42` | `[3.007, 8.999]` | `[0.01503, 0.03998]` | `[-2.998, +2.993]` | **`[0.5012, 0.8500]`** | `{F1, F2, F4, F5_id}` | `0 (100%)` | **`0.0%`** (Hum harmonics) |
 | `ood_grid` | `[0.0502, 0.9590, 3.1924]` | `13.88 / 27.58 / 41.13` | `[3.005, 8.990]` | `[0.01500, 0.03999]` | `[-2.997, +2.989]` | `[0.0000, 0.4999]` | `{F1, F2, F4, F5_id}` | `0 (100%)` | $100\%$ cropped $[2790, 2950]$ |
 | `ood_high_field` | **`[3.2520, 3.9180, 4.5996]`** | `19.46 / 32.05 / 43.15` | `[3.010, 8.987]` | `[0.01501, 0.04000]` | `[-2.995, +2.996]` | `[0.0000, 0.5000]` | `{F1, F2, F4, F5_id}` | `0 (100%)` | **`0.0%`** ($|\mathbf{B}| \in [3.25, 4.60]$, dips $\in [2760, 2980]$) |
+| `ood_asym` | `[0.0503, 0.9189, 3.1749]` | `14.12 / 27.49 / 40.91` | **`[2.001, 8.995]`** | `[0.01500, 0.04000]` | `[-2.998, +2.999]` | `[0.0000, 0.4999]` | `{F1, F2, F4, F5_id}` | `0 (100%)` | Asym $\in [1.35, 2.20]$, RF tilt $\pm 12\%$ |
+| `train_sim2real` (1k) | `[0.0501, 0.9612, 3.1982]` | `14.25 / 27.68 / 40.82` | **`[2.005, 8.997]`** ($12.3\% < 3\text{ MHz}$) | `[0.01501, 0.03999]` | `[-2.999, +2.998]` | `[0.0000, 0.5000]` | `{F1, F2, F4, F5_id}` | `0 (100%)` | Asym $\in [1.0, 2.0]$ ($20.6\%$ $1\times$), RF tilt $69.7\%$ |
 
 ![Stage 2 Parameter and SNR Distributions](../assets/stage2_parameter_distributions.png)
 
@@ -181,6 +189,11 @@ A dedicated $3 \times 4$ diagnostic grid contrasting true clean ODMR curves (`Y_
   - Stress-tests the dataset at $\text{SNR}_{\text{tot}} \in [0.20, 0.26]$ and $\text{dirt\_drift} \in [3.55, 4.96]$.
 
 ![Stage 2 Worst Cases and Stress Diagnostics](../assets/stage2_worst_cases.png)
+
+### 6.4 Stage 2.2 Per-Axis Asymmetry & RF Power Tilt Examples (`ood_asym.npz`, 8 Unique Spectra: `[3, 14, 2, 22, 92, 1, 11, 64]`)
+Contrasts the true asymmetric and RF-tilted clean target `Y_clean` (blue solid) against the equal-axis untitled reference curve (green dashed) across narrow linewidths ($\text{HWHM} \in [2.05, 6.92]\text{ MHz}$) and per-axis max/min ratios in $[1.52\times, 2.14\times]$:
+
+![Stage 2.2 OOD Asym Examples](../assets/stage2_ood_asym_examples.png)
 
 ---
 
@@ -263,8 +276,13 @@ Evaluated on:
 | **`ood_d0` (Single-Factor)** | `100` | `(3, 9)` | `22.0%` | `8.0%` | `45.56 [34.38, 70.91]` | `682.16 [232.96, 1216.98]` | `562.94 [323.48, 770.27]` | `226.02 [133.56, 340.17]` | `31.0% [23.0, 41.0]` | `39.0% [29.0, 49.0]` |
 | **`ood_hum` (Single-Factor)** | `100` | `(3, 9)` | `19.0%` | `8.0%` | `36.38 [32.06, 50.73]` | `369.66 [149.94, 988.36]` | `397.30 [226.64, 546.43]` | `155.02 [94.98, 229.43]` | `22.0% [14.0, 30.0]` | `33.0% [24.0, 43.0]` |
 | **`ood_noise` (Single-Factor)** | `100` | `(3, 9)` | `23.0%` | `5.0%` | `36.00 [23.35, 67.95]` | `422.49 [167.26, 1089.78]` | `595.19 [279.87, 832.71]` | `213.57 [111.97, 332.76]` | `30.0% [21.0, 39.0]` | `33.0% [23.0, 42.0]` |
+| **`ood_asym` — Easy (`2`)** | `114` | `(2, 9)` | `17.5%` | `5.3%` | **`34.53 [26.02, 53.27]`** | `378.87 [170.11, 972.95]` | `509.38 [307.67, 685.08]` | `189.07 [110.76, 287.02]` | **`22.8% [14.9, 30.7]`** | **`29.8% [21.9, 38.6]`** |
+| **`ood_asym` — Medium (`1`)** | `30` | `(2, 9)` | `16.7%` | `0.0%` | **`89.72 [63.75, 155.00]`** | `647.61 [193.44, 1278.18]` | `481.33 [195.98, 702.47]` | `252.59 [127.51, 417.40]` | **`43.3% [26.7, 60.0]`** | **`56.7% [40.0, 73.3]`** |
+| **`ood_asym` — Hard (`0`)** | `56` | `(2, 9)` | `19.6%` | `7.1%` | **`103.73 [67.82, 134.70]`** | `988.38 [454.52, 1450.14]` | `578.38 [356.81, 774.14]` | `308.97 [192.29, 442.56]` | **`51.8% [39.3, 64.3]`** | **`58.9% [44.6, 71.4]`** |
+| **`ood_asym` — Overall (`hwhm_bounds=(2,9)`)** | `200` | `(2, 9)` | `18.0%` | `5.0%` | **`62.25 [47.13, 73.09]`** | `625.92 [338.81, 1094.73]` | `525.66 [396.24, 641.96]` | `232.17 [170.58, 300.76]` | **`34.0% [28.0, 40.5]`** | **`42.0% [35.5, 49.0]`** |
+| **`ood_asym` — Overall (`hwhm_bounds=(3,9)`)** | `200` | `(3, 9)` | `18.0%` | `5.5%` | **`60.15 [46.25, 70.79]`** | `625.91 [341.19, 1094.48]` | `525.70 [395.92, 642.55]` | `230.92 [168.83, 299.44]` | **`32.5% [26.5, 39.0]`** | **`44.0% [37.5, 51.0]`** |
 
-### 8.3 Key Findings from the Expanded Stage 2.1 Evaluation
+### 8.3 Key Findings from the Expanded Stage 2.1 & 2.2 Evaluations
 1. **Consistency Between Importance-Weighted `val_id` ($N = 3,000$) and Direct `val_id_natural` ($N = 1,500$)**:
    - Importance-weighted `val_id` (`Median = 40.98 uT`, `Fail > 100 uT = 28.2%`, `Wrong Basin = 35.8%`) agrees closely with direct unstratified `val_id_natural` (`Median = 45.45 [40.47, 51.17] uT`, `Fail > 100 uT = 30.7% [28.3, 33.1]%`, `Wrong Basin = 38.4% [35.9, 40.8]%`). The slight $+2.5\%$ difference in fail/wrong-basin rate is fully explained by random sampling variation in `weak_splitting` fraction (`23.7%` in `val_id_natural` vs. `21.2%` in `val_id`).
 2. **Tightened Confidence Intervals Confirm Monotonic Regime Ordering on Both `val_id` and `val_ood`**:
@@ -272,3 +290,5 @@ Evaluated on:
    - On `val_ood` ($500$/regime), median $|\Delta B|$ increases cleanly from **`59.61 [47.68, 69.06] uT`** (Easy) $\to$ **`79.11 [65.74, 92.87] uT`** (Medium) $\to$ **`118.70 [105.67, 138.23] uT`** (Hard), and `P90` / `RMS` CIs are now tightly bounded (`Overall P90 = 396.16 [363.51, 428.17] uT`, `RMS = 398.76 [357.53, 439.81] uT`).
 3. **Empirical Confirmation of Frozen `baseline.py` Radial Confinement on `ood_high_field`**:
    - On `ood_high_field` ($|\mathbf{B}| \in [3.25, 4.60]\text{ mT}$, all 8 dips inside $[2760, 2980]\text{ MHz}$), frozen `fit_physical_odmr` suffers a **`97.0% [93.0, 100.0]%` wrong-basin rate** (`Median = 1357.22 uT`) and flags **`37.0%` `out_of_range = True`**, empirically confirming Task 2.1's programmatic audit of the `3.20 mT` radial cap in `src/baseline.py`.
+4. **Equal-Axis Physical Baseline Degradation Under Crystal/Antenna Asymmetry (`ood_asym.npz`, Stage 2.2 Task 3.3)**:
+   - Even though `ood_asym` uses purely ID noise, ID drift, and a slightly *lower* `weak_splitting` fraction (`18.0%` vs. `23.7%` in `val_id_natural`), introducing realistic per-axis contrast asymmetry (`max(w)/min(w) in [1.35, 2.20]`) and $\pm 12\%$ RF power roll-off degrades the equal-axis physical baseline's median error from **`40.98 uT`** (natural-weighted `val_id`) / **`45.45 uT`** (`val_id_natural`) to **`62.25 [47.13, 73.09] uT`** (`+37% to +52%`), raises `P90` error from **`333.22 uT`** to **`625.92 [338.81, 1094.73] uT`** (`+88%`), and increases the wrong-basin rate to **`42.0% [35.5, 49.0]%`** (`56.7%` in Medium and `58.9%` in Hard). Because Variable Projection fits a single scalar contrast $C$ shared across all 4 axes, an attenuated outer pair ($w_k \approx 0.65$) is under-weighted in the least-squares residual relative to an amplified inner pair ($w_j \approx 1.35$), increasing basin swaps during Stage A/B screening.

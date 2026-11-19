@@ -52,6 +52,8 @@ from src.noise_models import (
     generate_simulated_grid,
     generate_stochastic_and_gain_components,
     regime_id_from_eff_snr_white,
+    sample_axis_weights_with_target_ratio,
+    sample_mw_power_tilt_coeffs,
 )
 from src.physics import b_mag_from_splittings, canonicalize_b_vec, simulate_batch_clean_odmr
 
@@ -70,6 +72,7 @@ FACTOR_OOD_HUM: int = 6
 FACTOR_OOD_GRID: int = 7
 FACTOR_OOD_COMBINED: int = 8
 FACTOR_OOD_HIGH_FIELD: int = 9
+FACTOR_OOD_ASYM: int = 10
 
 FACTOR_ABLATION_NAMES: Dict[int, str] = {
     FACTOR_ID_STANDARD: "id_standard",
@@ -82,6 +85,7 @@ FACTOR_ABLATION_NAMES: Dict[int, str] = {
     FACTOR_OOD_GRID: "ood_grid",
     FACTOR_OOD_COMBINED: "ood_combined",
     FACTOR_OOD_HIGH_FIELD: "ood_high_field",
+    FACTOR_OOD_ASYM: "ood_asym",
 }
 
 LOCKED_TEST_SPLITS: Tuple[str, ...] = ("test_id", "test_ood")
@@ -89,7 +93,7 @@ LOCKED_TEST_SPLITS: Tuple[str, ...] = ("test_id", "test_ood")
 
 @dataclass(frozen=True)
 class SplitConfig:
-    """Complete deterministic specification for a Stage 2 / 2.1 dataset split."""
+    """Complete deterministic specification for a Stage 2 / 2.1 / 2.2 dataset split."""
 
     name: str
     split_seed: int
@@ -109,6 +113,48 @@ class SplitConfig:
     b_mag_range_mt: Tuple[float, float] = (B_MAG_MIN_MT, B_MAG_MAX_MT)
     in_window_freq_bounds_mhz: Tuple[float, float] = (2760.0, 2980.0)
     per_axis_contrast_jitter: float = 0.0
+    hwhm_range_mhz: Optional[Tuple[float, float]] = None
+    axis_asym_range: Optional[Tuple[float, float]] = None
+    axis_equal_prob: float = 0.0
+    mw_power_tilt_amp: float = 0.0
+    mw_power_tilt_prob: float = 1.0
+
+
+def get_stage3_sim2real_train_config(allow_high_field_in_window: bool = False) -> SplitConfig:
+    """Return the Stage 3 Sim-to-Real on-the-fly training preset (``train_sim2real``).
+
+    Implements Stage 2.2 Task 2:
+      - ``hwhm_range_mhz = (2.0, 9.0)`` MHz (covers real ``trianam`` ``2.75–2.96 MHz``).
+      - ``axis_asym_range = (1.0, 2.0)`` with ``axis_equal_prob = 0.20`` (20% exact equal-axis
+        ``1.0x`` + 80% uniform max/min ratio in ``[1.0, 2.0]``).
+      - ``mw_power_tilt_amp = 0.12`` with ``mw_power_tilt_prob = 0.70`` (applied with prob 0.7).
+      - All OOD exclusions strictly preserved (ID drift families ONLY, Gaussian white/pink noise ONLY,
+        ``d0_offset`` in ``[-3, +3]`` MHz, ``contrast`` in ``[0.015, 0.040]``, ``hum_harmonics <= 0.50``).
+    """
+    b_range = (B_MAG_MIN_MT, 4.60) if allow_high_field_in_window else (B_MAG_MIN_MT, B_MAG_MAX_MT)
+    return SplitConfig(
+        name="train_sim2real",
+        split_seed=20260103,
+        n_samples=0,
+        stratified_regimes=False,
+        factor_ablation_id=FACTOR_ID_STANDARD,
+        ood_hwhm=False,
+        ood_contrast=False,
+        ood_d0=False,
+        ood_noise=False,
+        ood_drift=False,
+        ood_hum=False,
+        ood_grid_aggressive=False,
+        grid_perturb_prob=0.30,
+        allow_high_field_in_window=bool(allow_high_field_in_window),
+        b_mag_range_mt=b_range,
+        in_window_freq_bounds_mhz=(2760.0, 2980.0),
+        hwhm_range_mhz=(2.0, 9.0),
+        axis_asym_range=(1.0, 2.0),
+        axis_equal_prob=0.20,
+        mw_power_tilt_amp=0.12,
+        mw_power_tilt_prob=0.70,
+    )
 
 
 SPLIT_REGISTRY: Dict[str, SplitConfig] = {
@@ -120,6 +166,7 @@ SPLIT_REGISTRY: Dict[str, SplitConfig] = {
         factor_ablation_id=FACTOR_ID_STANDARD,
         grid_perturb_prob=0.30,
     ),
+    "train_sim2real": get_stage3_sim2real_train_config(allow_high_field_in_window=False),
     "train_snapshot": SplitConfig(
         name="train_snapshot",
         split_seed=20260102,
@@ -232,6 +279,20 @@ SPLIT_REGISTRY: Dict[str, SplitConfig] = {
         allow_high_field_in_window=True,
         b_mag_range_mt=(3.25, 4.60),
         in_window_freq_bounds_mhz=(2760.0, 2980.0),
+    ),
+    "ood_asym": SplitConfig(
+        name="ood_asym",
+        split_seed=20260309,
+        n_samples=1000,
+        stratified_regimes=False,
+        factor_ablation_id=FACTOR_OOD_ASYM,
+        grid_perturb_prob=0.30,
+        b_mag_range_mt=(B_MAG_MIN_MT, B_MAG_MAX_MT),
+        hwhm_range_mhz=(2.0, 9.0),
+        axis_asym_range=(1.35, 2.20),
+        axis_equal_prob=0.0,
+        mw_power_tilt_amp=0.12,
+        mw_power_tilt_prob=1.0,
     ),
     "test_id": SplitConfig(
         name="test_id",
@@ -357,7 +418,16 @@ def generate_single_sample(
 
     # 1. Physical parameters (quantized to float32 representation so stored float32 params
     #    in .npz files reproduce float64 Y_clean and Y_splittings to < 1e-14 without f32->f64 drift)
-    if split_cfg.ood_hwhm:
+    if split_cfg.hwhm_range_mhz is not None:
+        hw_lo, hw_hi = float(split_cfg.hwhm_range_mhz[0]), float(split_cfg.hwhm_range_mhz[1])
+        hwhm_mhz = float(
+            np.clip(
+                np.float32(rng.uniform(hw_lo, hw_hi)),
+                hw_lo,
+                hw_hi,
+            )
+        )
+    elif split_cfg.ood_hwhm:
         hwhm_mhz = float(
             np.clip(
                 np.float32(rng.uniform(OOD_LINEWIDTH_RANGE[0], OOD_LINEWIDTH_RANGE[1])),
@@ -396,10 +466,39 @@ def generate_single_sample(
 
     e_mhz = 0.0
     axis_weights: Optional[np.ndarray] = None
-    if split_cfg.per_axis_contrast_jitter > 0.0:
-        rng_axis = np.random.default_rng(int(sample_seed) ^ 0xA5157E1687501234)
-        raw_w = np.exp(rng_axis.normal(0.0, float(split_cfg.per_axis_contrast_jitter), size=4))
-        axis_weights = (raw_w / np.mean(raw_w)).astype(np.float32).astype(np.float64)
+    axis_weights_f32: np.ndarray = np.ones(4, dtype=np.float32)
+    axis_asym_ratio: float = 1.0
+    mw_tilt_coeffs: Optional[np.ndarray] = None
+    mw_tilt_coeffs_f32: np.ndarray = np.zeros(2, dtype=np.float32)
+    realized_mw_tilt_amp: float = 0.0
+
+    if (
+        split_cfg.axis_asym_range is not None
+        or split_cfg.per_axis_contrast_jitter > 0.0
+        or split_cfg.mw_power_tilt_amp > 0.0
+    ):
+        rng_sim2real = np.random.default_rng(int(sample_seed) ^ 0xA5157E1687501234)
+        if split_cfg.axis_asym_range is not None:
+            axis_weights, axis_asym_ratio = sample_axis_weights_with_target_ratio(
+                rng_sim2real,
+                split_cfg.axis_asym_range,
+                equal_prob=split_cfg.axis_equal_prob,
+            )
+            axis_weights_f32 = axis_weights.astype(np.float32)
+        elif split_cfg.per_axis_contrast_jitter > 0.0:
+            raw_w = np.exp(rng_sim2real.normal(0.0, float(split_cfg.per_axis_contrast_jitter), size=4))
+            axis_weights_f32 = (raw_w / np.mean(raw_w)).astype(np.float32)
+            axis_weights_f32 = (axis_weights_f32 / np.float32(np.mean(axis_weights_f32))).astype(np.float32)
+            axis_weights = axis_weights_f32.astype(np.float64)
+            axis_asym_ratio = float(np.max(axis_weights_f32) / np.min(axis_weights_f32))
+
+        if split_cfg.mw_power_tilt_amp > 0.0:
+            mw_tilt_coeffs, realized_mw_tilt_amp = sample_mw_power_tilt_coeffs(
+                rng_sim2real,
+                split_cfg.mw_power_tilt_amp,
+                mw_power_tilt_prob=split_cfg.mw_power_tilt_prob,
+            )
+            mw_tilt_coeffs_f32 = mw_tilt_coeffs.astype(np.float32)
 
     if not split_cfg.allow_high_field_in_window:
         # |B| in [0.05, 3.20] mT (50% log-uniform, 50% uniform) — exact Stage 2 v1 RNG sequence
@@ -425,6 +524,7 @@ def generate_single_sample(
                 eta,
                 e_mhz=e_mhz,
                 axis_weights=axis_weights,
+                mw_tilt_coeffs=mw_tilt_coeffs,
             )
         )
     else:
@@ -468,6 +568,7 @@ def generate_single_sample(
                     eta,
                     e_mhz=e_mhz,
                     axis_weights=axis_weights,
+                    mw_tilt_coeffs=mw_tilt_coeffs,
                 )
             )
             if float(np.min(fm_arr)) >= f_win_lo and float(np.max(fp_arr)) <= f_win_hi:
@@ -533,6 +634,7 @@ def generate_single_sample(
             contrast,
             eta,
             axis_weights=axis_weights,
+            mw_tilt_coeffs=mw_tilt_coeffs,
         )
 
     # 6. Drift, Hum, Stochastic, and Gain components on freqs_sim
@@ -675,9 +777,11 @@ def generate_single_sample(
         "aux_sample_idx": np.int32(sample_idx),
         "aux_e_mhz": np.float32(e_mhz),
         "aux_factor_ablation_id": np.int8(split_cfg.factor_ablation_id),
+        "aux_axis_weights": axis_weights_f32,
+        "aux_axis_asym_ratio": np.float32(axis_asym_ratio),
+        "aux_mw_power_tilt_amp": np.float32(realized_mw_tilt_amp),
+        "aux_mw_power_tilt_coeffs": mw_tilt_coeffs_f32,
     }
-    if axis_weights is not None:
-        sample_dict["aux_axis_weights"] = axis_weights.astype(np.float32)
 
     if return_f64_components:
         sample_dict["f64_components"] = {
@@ -891,7 +995,17 @@ def load_synthetic_split(
             )
 
     with np.load(file_path, allow_pickle=False) as npz_data:
-        return {k: npz_data[k] for k in npz_data.files}
+        out_dict = {k: npz_data[k] for k in npz_data.files}
+    n_s = int(out_dict["X_noisy"].shape[0])
+    if "aux_axis_weights" not in out_dict:
+        out_dict["aux_axis_weights"] = np.ones((n_s, 4), dtype=np.float32)
+    if "aux_axis_asym_ratio" not in out_dict:
+        out_dict["aux_axis_asym_ratio"] = np.ones(n_s, dtype=np.float32)
+    if "aux_mw_power_tilt_amp" not in out_dict:
+        out_dict["aux_mw_power_tilt_amp"] = np.zeros(n_s, dtype=np.float32)
+    if "aux_mw_power_tilt_coeffs" not in out_dict:
+        out_dict["aux_mw_power_tilt_coeffs"] = np.zeros((n_s, 2), dtype=np.float32)
+    return out_dict
 
 
 def save_split_npz(
@@ -957,10 +1071,28 @@ def validate_split_arrays_in_memory(
     assert float(np.max(b_mag)) <= b_hi_chk + 1e-4
     assert float(np.min(eta)) >= 0.0 and float(np.max(eta)) <= 1.0
 
-    if split_cfg.ood_hwhm:
+    if split_cfg.hwhm_range_mhz is not None:
+        hw_lo, hw_hi = float(split_cfg.hwhm_range_mhz[0]), float(split_cfg.hwhm_range_mhz[1])
+        assert float(np.min(hwhm)) >= hw_lo - 1e-5 and float(np.max(hwhm)) <= hw_hi + 1e-5
+    elif split_cfg.ood_hwhm:
         assert float(np.min(hwhm)) >= 9.5 - 1e-5 and float(np.max(hwhm)) <= 13.5 + 1e-5
     else:
         assert float(np.min(hwhm)) >= 3.0 - 1e-5 and float(np.max(hwhm)) <= 9.0 + 1e-5
+
+    if split_cfg.axis_asym_range is not None:
+        r_lo, r_hi = float(split_cfg.axis_asym_range[0]), float(split_cfg.axis_asym_range[1])
+        ratios = arrays["aux_axis_asym_ratio"].astype(np.float64)
+        w_arr = arrays["aux_axis_weights"].astype(np.float64)
+        assert float(np.max( np.abs(np.mean(w_arr, axis=1) - 1.0) )) < 1e-5
+        if split_cfg.axis_equal_prob > 0.0:
+            non_eq = ratios > 1.0 + 1e-5
+            assert bool(np.all((ratios[~non_eq] >= 1.0 - 1e-5) & (ratios[~non_eq] <= 1.0 + 1e-5)))
+            if np.any(non_eq):
+                assert float(np.min(ratios[non_eq])) >= r_lo - 1e-4
+                assert float(np.max(ratios[non_eq])) <= r_hi + 1e-4
+        else:
+            assert float(np.min(ratios)) >= r_lo - 1e-4
+            assert float(np.max(ratios)) <= r_hi + 1e-4
 
     if split_cfg.ood_contrast:
         in_lo = (contrast >= 0.010 - 1e-6) & (contrast <= 0.0145 + 1e-6)
@@ -1040,7 +1172,25 @@ def validate_split_arrays_in_memory(
         )
         err_f64 = float(np.max(np.abs(sum_f64 - comps["X_noisy_f64"])))
         err_f32 = float(np.max(np.abs(sum_f64.astype(np.float32) - arrays["X_noisy"][idx])))
-        err_clean = float(np.max(np.abs(comps["Y_clean"] - batch_sim["spectra"][j_pos])))
+        if (
+            split_cfg.axis_asym_range is not None
+            or split_cfg.per_axis_contrast_jitter > 0.0
+            or split_cfg.mw_power_tilt_amp > 0.0
+        ):
+            ref_clean, *_ = fast_simulate_single_clean_odmr(
+                CANONICAL_FREQS,
+                b_vecs_sub[j_pos],
+                float(d0_sub[j_pos]),
+                float(hwhm_sub[j_pos]),
+                float(contrast_sub[j_pos]),
+                float(eta_sub[j_pos]),
+                e_mhz=0.0,
+                axis_weights=arrays["aux_axis_weights"][idx].astype(np.float64),
+                mw_tilt_coeffs=arrays["aux_mw_power_tilt_coeffs"][idx].astype(np.float64),
+            )
+            err_clean = float(np.max(np.abs(comps["Y_clean"] - ref_clean)))
+        else:
+            err_clean = float(np.max(np.abs(comps["Y_clean"] - batch_sim["spectra"][j_pos])))
         err_split = float(
             np.max(
                 np.abs(
@@ -1323,9 +1473,10 @@ def generate_stage21_splits_and_update_manifest(
 def measure_generator_throughput(
     n_samples: int = 2000,
     n_workers: Optional[int] = None,
+    split_cfg: Union[str, SplitConfig] = "train",
 ) -> Dict[str, float]:
-    """Benchmark single-process and multi-worker dataset generation throughput (Part 4)."""
-    cfg = SPLIT_REGISTRY["train"]
+    """Benchmark single-process and multi-worker dataset generation throughput (Part 4 & Task 2)."""
+    cfg = SPLIT_REGISTRY[split_cfg] if isinstance(split_cfg, str) else split_cfg
     workers = n_workers if n_workers is not None else max(2, min(os.cpu_count() or 4, 8))
 
     # Warm-up single process
@@ -1419,13 +1570,13 @@ class OnTheFlyODMRIterableDataset:
 
     def __init__(
         self,
-        split_name: str = "train",
+        split_name: Union[str, SplitConfig] = "train",
         start_idx: int = 0,
         max_samples: Optional[int] = None,
         batch_size: Optional[int] = None,
         as_torch: bool = False,
     ) -> None:
-        self.split_cfg = SPLIT_REGISTRY[split_name]
+        self.split_cfg = SPLIT_REGISTRY[split_name] if isinstance(split_name, str) else split_name
         self.start_idx = int(start_idx)
         self.max_samples = max_samples
         self.batch_size = batch_size

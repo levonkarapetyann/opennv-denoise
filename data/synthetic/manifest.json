@@ -1,5 +1,5 @@
 {
-  "stage": "stage2-data-v2",
+  "stage": "Stage 2.2 (stage2-data-v3)",
   "generated_at_utc": "2026-11-19T13:51:51.404588+00:00",
   "canonical_grid": {
     "freq_min_mhz": 2750.0,
@@ -209,14 +209,38 @@
       "sha256": "432b6e668a4fefe4c1a93cdb0aad3a115fabb63de0d8f07ce0a50c9f20614576",
       "generation_time_sec": 1.444,
       "throughput_spectra_per_sec": 692.3
+    },
+    "ood_asym": {
+      "file": "ood_asym.npz",
+      "split_seed": 20260309,
+      "n_samples": 1000,
+      "stratified_regimes": false,
+      "factor_ablation_id": 10,
+      "factor_ablation_name": "ood_asym",
+      "b_mag_range_mt": [
+        0.05,
+        3.2
+      ],
+      "hwhm_range_mhz": [
+        2.0,
+        9.0
+      ],
+      "axis_asym_range": [
+        1.35,
+        2.2
+      ],
+      "mw_power_tilt_amp": 0.12,
+      "sha256": "a5498d1b570240ac1a17f3b3e918abbb82bfa4324b96f5ebd2a4b267f3e6525b",
+      "generation_time_sec": 6.432,
+      "throughput_spectra_per_sec": 155.5
     }
   },
   "test_access_counts": {
     "data_read": 0,
-    "hash_check": 10,
+    "hash_check": 14,
     "write_once": 2
   },
-  "updated_at_utc": "2026-11-19T14:53:24.066473+00:00",
+  "updated_at_utc": "2026-11-19T16:08:06.356351+00:00",
   "reference_artifacts": {
     "val_baseline_ref": {
       "file": "val_baseline_ref.npz",
@@ -225,6 +249,12 @@
       "n_val_id_natural": 1500,
       "n_val_ood": 1500,
       "n_per_ood_factor": 100
+    },
+    "ood_asym_baseline_ref": {
+      "file": "ood_asym_baseline_ref.npz",
+      "sha256": "db7d7ac1ea01bcd4e237db8b891888188bacecc022674615618fc9016ad15c29",
+      "n_evaluated": 200
     }
-  }
+  },
+  "on_the_fly_train_sim2real_seed": 20260103
 }

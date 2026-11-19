@@ -129,6 +129,97 @@ def regime_id_from_eff_snr_white(eff_snr_white: float) -> int:
     return REGIME_EASY
 
 
+def sample_axis_weights_with_target_ratio(
+    rng: np.random.Generator,
+    axis_asym_range: Tuple[float, float],
+    equal_prob: float = 0.0,
+) -> Tuple[np.ndarray, float]:
+    """Sample 4 positive per-axis contrast weights w with mean(w)==1 and exact max(w)/min(w) ratio.
+
+    Implements Stage 2.2 Task 1.1:
+      - With probability ``equal_prob``, returns equal weights ``w = (1, 1, 1, 1)`` (ratio ``1.0``).
+      - Otherwise draws ``target_ratio ~ Uniform(axis_asym_min, axis_asym_max)``, samples
+        ``u_k ~ N(0, 1)``, centers ``u``, rescales ``u`` so ``exp(max(u) - min(u)) == target_ratio``,
+        and normalizes ``w = exp(u) / mean(exp(u))``.
+    """
+    r_min, r_max = float(axis_asym_range[0]), float(axis_asym_range[1])
+    if equal_prob > 0.0 and float(rng.random()) < equal_prob:
+        target_ratio = 1.0
+    elif r_max <= r_min + 2e-5:
+        target_ratio = max(1.0, 0.5 * (r_min + r_max))
+    else:
+        target_ratio = float(rng.uniform(r_min + 1e-5, r_max - 1e-5))
+
+    if target_ratio <= 1.0 + 1e-12:
+        w_f32 = np.ones(4, dtype=np.float32)
+        return w_f32.astype(np.float64), 1.0
+
+    u = rng.standard_normal(4)
+    u = u - float(np.mean(u))
+    span = float(np.max(u) - np.min(u))
+    if span < 1e-12:
+        u = np.array([-0.5, -1.0 / 6.0, 1.0 / 6.0, 0.5], dtype=np.float64)
+        span = 1.0
+    u_scaled = u * (float(np.log(target_ratio)) / span)
+    exp_u = np.exp(u_scaled)
+    w_f64 = exp_u / float(np.mean(exp_u))
+    w_f32 = (w_f64 / float(np.mean(w_f64))).astype(np.float32)
+    w_f32 = (w_f32 / np.float32(np.mean(w_f32))).astype(np.float32)
+    w_out = w_f32.astype(np.float64)
+    realized_ratio = float(np.max(w_f32) / np.min(w_f32))
+    return w_out, realized_ratio
+
+
+def sample_mw_power_tilt_coeffs(
+    rng: np.random.Generator,
+    mw_power_tilt_amp: float,
+    mw_power_tilt_prob: float = 1.0,
+) -> Tuple[np.ndarray, float]:
+    """Sample smooth RF power roll-off coefficients (c1, c2) for m(f) = 1 + c1*u + c2*(u^2 - 1/3).
+
+    Guarantees ``m(f) in [1 - amp, 1 + amp]`` for all ``u in [-1, 1]``.
+    """
+    amp = float(mw_power_tilt_amp)
+    if amp <= 0.0 or (mw_power_tilt_prob < 1.0 and float(rng.random()) >= mw_power_tilt_prob):
+        return np.zeros(2, dtype=np.float64), 0.0
+
+    a1 = float(rng.standard_normal())
+    a2 = float(rng.normal(0.0, 0.5))
+    if abs(a1) < 1e-12 and abs(a2) < 1e-12:
+        a1 = 1.0
+
+    # Analytic max of |a1*u + a2*(u^2 - 1/3)| on u in [-1, 1]
+    cand_u = [-1.0, 1.0]
+    if abs(a2) > 1e-12:
+        u_star = -a1 / (2.0 * a2)
+        if -1.0 < u_star < 1.0:
+            cand_u.append(u_star)
+    s_max = max(abs(a1 * u_val + a2 * (u_val * u_val - (1.0 / 3.0))) for u_val in cand_u)
+    scale = amp / max(s_max, 1e-12)
+    coeffs_f32 = np.array([a1 * scale, a2 * scale], dtype=np.float32)
+    return coeffs_f32.astype(np.float64), float(np.float32(amp))
+
+
+def evaluate_mw_power_tilt_envelope(
+    freqs: np.ndarray,
+    mw_tilt_coeffs: Optional[np.ndarray],
+) -> Optional[np.ndarray]:
+    """Evaluate smooth RF power tilt envelope ``m(f) = 1 + c1*u + c2*(u^2 - 1/3)`` on ``freqs``."""
+    if mw_tilt_coeffs is None:
+        return None
+    c1 = float(mw_tilt_coeffs[0])
+    c2 = float(mw_tilt_coeffs[1])
+    if c1 == 0.0 and c2 == 0.0:
+        return None
+    if freqs.shape[0] == N_POINTS and freqs is CANONICAL_FREQS:
+        u = _U_512
+        u2_m = _U2_512
+    else:
+        u = np.clip((freqs - D0_MHZ) * (1.0 / 120.0), -1.0, 1.0)
+        u2_m = u * u - (1.0 / 3.0)
+    return 1.0 + c1 * u + c2 * u2_m
+
+
 def evaluate_transitions_on_grid(
     freqs: np.ndarray,
     fm_arr: np.ndarray,
@@ -138,6 +229,7 @@ def evaluate_transitions_on_grid(
     contrast: float,
     eta: float,
     axis_weights: Optional[np.ndarray] = None,
+    mw_tilt_coeffs: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Evaluate 4-axis clean ODMR spectrum and per-axis single-branch dip depths in one pass."""
     eff_amp = (contrast * 0.28 / 3.0) * cf_arr  # (4,)
@@ -156,8 +248,14 @@ def evaluate_transitions_on_grid(
     comp = (1.0 - eta) / (u_sq + 1.0) + eta * np.exp(-_LN_2 * u_sq)  # (4, 6, M)
     branch_minus = eff_amp[:, None] * (comp[:, 0, :] + comp[:, 1, :] + comp[:, 2, :])
     branch_plus = eff_amp[:, None] * (comp[:, 3, :] + comp[:, 4, :] + comp[:, 5, :])
-    per_axis_depths = np.max(branch_minus, axis=1)
-    spectrum = 1.0 - np.sum(branch_minus + branch_plus, axis=0)
+    total_dips = np.sum(branch_minus + branch_plus, axis=0)
+    m_env = evaluate_mw_power_tilt_envelope(freqs, mw_tilt_coeffs)
+    if m_env is not None:
+        total_dips = m_env * total_dips
+        per_axis_depths = np.max(branch_minus * m_env[None, :], axis=1)
+    else:
+        per_axis_depths = np.max(branch_minus, axis=1)
+    spectrum = 1.0 - total_dips
     return spectrum, per_axis_depths
 
 
@@ -170,6 +268,7 @@ def fast_simulate_single_clean_odmr(
     eta: float,
     e_mhz: float = 0.0,
     axis_weights: Optional[np.ndarray] = None,
+    mw_tilt_coeffs: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Fast single-spectrum exact spin-1 ODMR evaluator matching ``simulate_clean_odmr`` to <1e-14.
 
@@ -226,7 +325,15 @@ def fast_simulate_single_clean_odmr(
     cf_arr = purity_ms0 * purity_ms0
 
     spectrum, per_axis_depths = evaluate_transitions_on_grid(
-        freqs, fm_arr, fp_arr, cf_arr, hwhm_mhz, contrast, eta, axis_weights=axis_weights
+        freqs,
+        fm_arr,
+        fp_arr,
+        cf_arr,
+        hwhm_mhz,
+        contrast,
+        eta,
+        axis_weights=axis_weights,
+        mw_tilt_coeffs=mw_tilt_coeffs,
     )
     splittings_sorted = np.sort(fp_arr - fm_arr)
     return spectrum, splittings_sorted, b_par, b_perp, fm_arr, fp_arr, cf_arr, per_axis_depths

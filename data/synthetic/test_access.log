@@ -14,3 +14,5 @@
 {"timestamp_utc": "2026-11-19T15:19:14.810235+00:00", "split": "test_ood", "file": "test_ood.npz", "event": "hash_check", "caller": "compute_file_sha256"}
 {"timestamp_utc": "2026-11-19T15:25:09.386793+00:00", "split": "test_id", "file": "test_id.npz", "event": "hash_check", "caller": "compute_file_sha256"}
 {"timestamp_utc": "2026-11-19T15:25:09.448342+00:00", "split": "test_ood", "file": "test_ood.npz", "event": "hash_check", "caller": "compute_file_sha256"}
+{"timestamp_utc": "2026-11-19T16:13:35.226736+00:00", "split": "test_id", "file": "test_id.npz", "event": "hash_check", "caller": "compute_file_sha256"}
+{"timestamp_utc": "2026-11-19T16:13:35.295080+00:00", "split": "test_ood", "file": "test_ood.npz", "event": "hash_check", "caller": "compute_file_sha256"}

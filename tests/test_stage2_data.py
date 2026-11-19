@@ -35,6 +35,7 @@ from src.dataset_gen import (
     derive_sample_seed,
     generate_single_sample,
     generate_split_arrays,
+    get_stage3_sim2real_train_config,
     get_test_access_counts,
     load_synthetic_split,
     regenerate_sample_components,
@@ -180,6 +181,7 @@ def test_seed_disjointness_and_no_identical_parameters_across_splits() -> None:
         "ood_hum",
         "ood_grid",
         "ood_high_field",
+        "ood_asym",
     ]
 
     all_sample_seeds: set[int] = set()
@@ -707,7 +709,8 @@ def test_stage21_per_axis_contrast_jitter_and_stage2v1_hash_preservation() -> No
     )
     s0 = generate_single_sample(0, cfg_no_jit)
     s1 = generate_single_sample(0, cfg_jit)
-    assert "aux_axis_weights" not in s0
+    assert np.allclose(s0["aux_axis_weights"], np.ones(4, dtype=np.float32))
+    assert float(s0["aux_axis_asym_ratio"]) == 1.0
     assert np.isclose(float(np.mean(s1["aux_axis_weights"])), 1.0, atol=1e-6)
     assert float(np.std(s1["aux_axis_weights"])) > 0.02
     assert float(np.max(s1["aux_axis_weights"]) / np.min(s1["aux_axis_weights"])) > 1.05
@@ -738,4 +741,124 @@ def test_stage21_unique_12_example_selection_and_artifacts() -> None:
         assert ref["ood_high_field_abs_err_ut"].shape == (100,)
         assert float(np.mean(ref["ood_high_field_wrong_basin"])) >= 0.90
         assert float(np.mean(ref["ood_high_field_out_of_range"])) >= 0.30
+
+
+def test_stage22_train_sim2real_and_ood_asym_invariants() -> None:
+    """Stage 2.2 Tasks 1–4: Verify train_sim2real, ood_asym.npz, Y_clean target semantics, and v1/v2 hash preservation."""
+    from src.noise_models import fast_simulate_single_clean_odmr
+
+    # 1. Verify all existing stage2-data-v1 and stage2-data-v2 SHA256 hashes remain bit-identical
+    with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    expected_v1_v2_hashes = {
+        "train_snapshot": "37761c3d40349ae3c0336f208074be2fc33035b1420642f2a2b38b28af4791e8",
+        "val_id": "294efabc236b362340078d789282654085915e3bb68648f6165573c4f41a48cc",
+        "val_id_natural": "20c84af464043f344c6b4518580ca2c81c8f8d63f018c6f01a610a242fc391ad",
+        "val_ood": "014df8d74cab853b09771a114750db2fce5afd194c48e96d3d4098d3e4026dfa",
+        "ood_hwhm": "643cb17ffd93f0d41fe45fac48dfc88a3e404822846f611a075ef910a4838b19",
+        "ood_contrast": "9396e1f3efc8b3ee7fb264c0564f4cf0c7ebbd127389b787f226a52f8b4e30a6",
+        "ood_d0": "501e98151a698d6e97cf012828d65e99328ce2b46975a1a6f108367304b2645a",
+        "ood_noise": "9c6bbd457165dca0aa73d7c5a190461047d2b62a850ecd3484f59a2c24735c8b",
+        "ood_drift": "c75b7c630e7ffe975c23f397708ea4c56af1408af6017c50eaf4d55f058181c4",
+        "ood_hum": "9b57ed282f1a5320da09dd0373d145a118e7660a3f76f72b7479e5b7be67c340",
+        "ood_grid": "f7998fbb6d7da6fdba218b0fb0b03838d3fca4371a68fac4648bc08fd6dad0c7",
+        "ood_high_field": "432b6e668a4fefe4c1a93cdb0aad3a115fabb63de0d8f07ce0a50c9f20614576",
+        "test_id": "819e007a1a3fbc45d52df4334fd0ce6906f7e59e31cd22204b023383d63cbf79",
+        "test_ood": "fcdce8033fb0d04cfd5cb7c5ea92b1b9ee7fbfd457556bba00c8a3e02ce627e7",
+    }
+    for sname, exp_sha in expected_v1_v2_hashes.items():
+        assert manifest["splits"][sname]["sha256"] == exp_sha, f"Hash changed for {sname}!"
+
+    assert (
+        manifest["reference_artifacts"]["val_baseline_ref"]["sha256"]
+        == "906b78e739b17e74e016e89e2b9a66c98d558186238e142e14f99d8737e087a8"
+    )
+    assert get_test_access_counts(TEST_ACCESS_LOG_PATH)["data_read"] == 0
+
+    # 2. Verify backward-compatible defaults on older splits loaded via load_synthetic_split
+    d_vid = load_synthetic_split("val_id")
+    assert d_vid["aux_axis_weights"].shape == (4000, 4)
+    assert np.allclose(d_vid["aux_axis_weights"], 1.0)
+    assert np.allclose(d_vid["aux_axis_asym_ratio"], 1.0)
+    assert np.allclose(d_vid["aux_mw_power_tilt_amp"], 0.0)
+
+    # 3. Verify train_sim2real preset invariants on 250 samples
+    cfg_s2r = get_stage3_sim2real_train_config(allow_high_field_in_window=False)
+    s2r_batch = generate_split_arrays(cfg_s2r, n_samples=250, n_workers=1)
+    w_s2r = s2r_batch["aux_axis_weights"].astype(np.float64)
+    r_s2r = s2r_batch["aux_axis_asym_ratio"].astype(np.float64)
+    hw_s2r = s2r_batch["Y_hwhm"].astype(np.float64)
+    tilt_s2r = s2r_batch["aux_mw_power_tilt_amp"].astype(np.float64)
+
+    assert float(np.max(np.abs(np.mean(w_s2r, axis=1) - 1.0))) < 1e-6
+    assert float(np.min(r_s2r)) >= 1.0 - 1e-6 and float(np.max(r_s2r)) <= 2.0 + 1e-6
+    assert 0.12 <= float(np.mean(np.isclose(r_s2r, 1.0, atol=1e-5))) <= 0.30
+    assert 0.60 <= float(np.mean(np.isclose(tilt_s2r, 0.12, atol=1e-5))) <= 0.80
+    assert float(np.min(hw_s2r)) >= 2.0 and float(np.max(hw_s2r)) <= 9.0
+    assert bool(np.any(hw_s2r < 3.0)), "Expected samples with HWHM < 3.0 MHz in train_sim2real"
+
+    # Strict OOD exclusion checks on train_sim2real
+    fams_s2r = set(np.unique(s2r_batch["aux_drift_family_id"]).tolist())
+    assert fams_s2r.issubset(set(ID_DRIFT_FAMILIES))
+    assert DRIFT_F3_EXP_OOD not in fams_s2r and DRIFT_F5_OOD not in fams_s2r
+    assert bool(np.all(s2r_batch["aux_noise_type"] == NOISE_GAUSSIAN_ID))
+    assert float(np.min(s2r_batch["Y_d0"])) >= -3.0 and float(np.max(s2r_batch["Y_d0"])) <= 3.0
+    assert float(np.min(s2r_batch["aux_contrast"])) >= 0.015 and float(np.max(s2r_batch["aux_contrast"])) <= 0.040
+    assert float(np.max(s2r_batch["aux_hum_rel_harmonics"])) <= 0.50 + 1e-6
+
+    # 4. Verify ood_asym.npz properties, Y_clean target semantics, and float64 additive identity
+    d_asym = load_synthetic_split("ood_asym")
+    assert d_asym["X_noisy"].shape == (1000, N_POINTS)
+    w_asym = d_asym["aux_axis_weights"].astype(np.float64)
+    r_asym = d_asym["aux_axis_asym_ratio"].astype(np.float64)
+    hw_asym = d_asym["Y_hwhm"].astype(np.float64)
+    assert float(np.max(np.abs(np.mean(w_asym, axis=1) - 1.0))) < 1e-6
+    assert float(np.min(r_asym)) >= 1.35 - 1e-5 and float(np.max(r_asym)) <= 2.20 + 1e-5
+    assert np.allclose(np.max(w_asym, axis=1) / np.min(w_asym, axis=1), r_asym, atol=1e-5)
+    assert float(np.min(hw_asym)) >= 2.0 and float(np.max(hw_asym)) <= 9.0
+    assert np.allclose(d_asym["aux_mw_power_tilt_amp"], 0.12, atol=1e-5)
+
+    for idx in (0, 5, 17, 42, 128):
+        comps = regenerate_sample_components("ood_asym", idx)
+        total_f64 = (
+            comps["Y_clean"]
+            + comps["drift"]
+            + comps["hum"]
+            + comps["pink"]
+            + comps["white"]
+            + comps["other"]
+        )
+        assert float(np.max(np.abs(total_f64 - comps["X_noisy_f64"]))) < 1e-12
+        assert float(np.max(np.abs(total_f64.astype(np.float32) - d_asym["X_noisy"][idx]))) < 1e-6
+
+        # Prove Y_clean includes both per-axis weights w and RF power tilt m(f) (differs from equal-axis clean)
+        eq_clean, *_ = fast_simulate_single_clean_odmr(
+            CANONICAL_FREQS,
+            d_asym["aux_b_vec_canon"][idx].astype(np.float64),
+            D0_MHZ + float(d_asym["Y_d0"][idx]),
+            float(d_asym["Y_hwhm"][idx]),
+            float(d_asym["aux_contrast"][idx]),
+            float(d_asym["aux_eta"][idx]),
+            e_mhz=0.0,
+            axis_weights=None,
+            mw_tilt_coeffs=None,
+        )
+        asym_clean, *_ = fast_simulate_single_clean_odmr(
+            CANONICAL_FREQS,
+            d_asym["aux_b_vec_canon"][idx].astype(np.float64),
+            D0_MHZ + float(d_asym["Y_d0"][idx]),
+            float(d_asym["Y_hwhm"][idx]),
+            float(d_asym["aux_contrast"][idx]),
+            float(d_asym["aux_eta"][idx]),
+            e_mhz=0.0,
+            axis_weights=d_asym["aux_axis_weights"][idx].astype(np.float64),
+            mw_tilt_coeffs=d_asym["aux_mw_power_tilt_coeffs"][idx].astype(np.float64),
+        )
+        assert float(np.max(np.abs(comps["Y_clean"] - asym_clean))) < 1e-12
+        assert float(np.max(np.abs(comps["Y_clean"] - eq_clean))) > 1e-4
+
+    assert (DEFAULT_SYNTHETIC_DIR / "ood_asym_baseline_ref.npz").exists()
+    assert (ROOT_DIR / "assets" / "stage2_ood_asym_examples.png").exists()
+
 
