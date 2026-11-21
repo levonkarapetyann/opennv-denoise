@@ -4,3 +4,5 @@ __pycache__/
 .venv/
 scratch/
 data/synthetic/*.npz
+data/raw_experimental/trianam_*
+

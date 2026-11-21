@@ -1,0 +1,96 @@
+{
+  "created_at_utc": "2026-11-21T08:48:58.648228+00:00",
+  "frozen_source_files": {
+    "src/baseline.py": "3f2cb9cd85b86e63bf24676aabfb6ca84cf0878dd066d874d8eef91393b42c66",
+    "src/physics.py": "bf0b1776ad483e571a842cc5f78ad7d68eb9f3dbf897bedc863d990189107906",
+    "src/noise.py": "5dcdf45f73cc97027fa68b57095efd89659260856ab75099f7b0d7929ca6dd35",
+    "tests/test_physics.py": "44b661369b3d20a52e49cda8aced5d98c7958be7982f4b22973b4d475af346f9"
+  },
+  "frozen_synthetic_archives": {
+    "data/synthetic/ood_asym.npz": {
+      "sha256": "a5498d1b570240ac1a17f3b3e918abbb82bfa4324b96f5ebd2a4b267f3e6525b",
+      "size_bytes": 4885224,
+      "locked_test": false
+    },
+    "data/synthetic/ood_asym_baseline_ref.npz": {
+      "sha256": "db7d7ac1ea01bcd4e237db8b891888188bacecc022674615618fc9016ad15c29",
+      "size_bytes": 18299,
+      "locked_test": false
+    },
+    "data/synthetic/ood_contrast.npz": {
+      "sha256": "9396e1f3efc8b3ee7fb264c0564f4cf0c7ebbd127389b787f226a52f8b4e30a6",
+      "size_bytes": 4852152,
+      "locked_test": false
+    },
+    "data/synthetic/ood_d0.npz": {
+      "sha256": "501e98151a698d6e97cf012828d65e99328ce2b46975a1a6f108367304b2645a",
+      "size_bytes": 4852128,
+      "locked_test": false
+    },
+    "data/synthetic/ood_drift.npz": {
+      "sha256": "c75b7c630e7ffe975c23f397708ea4c56af1408af6017c50eaf4d55f058181c4",
+      "size_bytes": 4852140,
+      "locked_test": false
+    },
+    "data/synthetic/ood_grid.npz": {
+      "sha256": "f7998fbb6d7da6fdba218b0fb0b03838d3fca4371a68fac4648bc08fd6dad0c7",
+      "size_bytes": 4852136,
+      "locked_test": false
+    },
+    "data/synthetic/ood_high_field.npz": {
+      "sha256": "432b6e668a4fefe4c1a93cdb0aad3a115fabb63de0d8f07ce0a50c9f20614576",
+      "size_bytes": 4852160,
+      "locked_test": false
+    },
+    "data/synthetic/ood_hum.npz": {
+      "sha256": "9b57ed282f1a5320da09dd0373d145a118e7660a3f76f72b7479e5b7be67c340",
+      "size_bytes": 4852132,
+      "locked_test": false
+    },
+    "data/synthetic/ood_hwhm.npz": {
+      "sha256": "643cb17ffd93f0d41fe45fac48dfc88a3e404822846f611a075ef910a4838b19",
+      "size_bytes": 4852136,
+      "locked_test": false
+    },
+    "data/synthetic/ood_noise.npz": {
+      "sha256": "9c6bbd457165dca0aa73d7c5a190461047d2b62a850ecd3484f59a2c24735c8b",
+      "size_bytes": 4852140,
+      "locked_test": false
+    },
+    "data/synthetic/test_id.npz": {
+      "sha256": "819e007a1a3fbc45d52df4334fd0ce6906f7e59e31cd22204b023383d63cbf79",
+      "size_bytes": 19369132,
+      "locked_test": true
+    },
+    "data/synthetic/test_ood.npz": {
+      "sha256": "fcdce8033fb0d04cfd5cb7c5ea92b1b9ee7fbfd457556bba00c8a3e02ce627e7",
+      "size_bytes": 19369136,
+      "locked_test": true
+    },
+    "data/synthetic/train_snapshot.npz": {
+      "sha256": "37761c3d40349ae3c0336f208074be2fc33035b1420642f2a2b38b28af4791e8",
+      "size_bytes": 96793160,
+      "locked_test": false
+    },
+    "data/synthetic/val_baseline_ref.npz": {
+      "sha256": "906b78e739b17e74e016e89e2b9a66c98d558186238e142e14f99d8737e087a8",
+      "size_bytes": 285662,
+      "locked_test": false
+    },
+    "data/synthetic/val_id.npz": {
+      "sha256": "294efabc236b362340078d789282654085915e3bb68648f6165573c4f41a48cc",
+      "size_bytes": 19369128,
+      "locked_test": false
+    },
+    "data/synthetic/val_id_natural.npz": {
+      "sha256": "20c84af464043f344c6b4518580ca2c81c8f8d63f018c6f01a610a242fc391ad",
+      "size_bytes": 7271660,
+      "locked_test": false
+    },
+    "data/synthetic/val_ood.npz": {
+      "sha256": "014df8d74cab853b09771a114750db2fce5afd194c48e96d3d4098d3e4026dfa",
+      "size_bytes": 19369132,
+      "locked_test": false
+    }
+  }
+}
